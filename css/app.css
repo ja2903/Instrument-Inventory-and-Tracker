@@ -1,0 +1,196 @@
+/**
+ * Instrument Tracker — the handful of styles Tailwind utilities cannot express
+ * inline: navigation states, print rules for the label sheet, and the camera
+ * overlay. Everything else is utility classes in the markup.
+ */
+
+/* ---------------- navigation ---------------------------------- */
+
+.nav-link {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.625rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #57534e;                       /* stone-600 */
+  transition: background-color .15s, color .15s;
+}
+.nav-link:hover { background: #f5f5f4; color: #1c1917; }
+.nav-link[aria-current="page"] {
+  background: #FEF7EC;                  /* saffron-50 */
+  color: #A9500F;                       /* saffron-700 */
+  font-weight: 600;
+}
+
+.tab-link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  padding: 0.625rem 0.25rem 0.75rem;
+  min-height: 3.75rem;                  /* a comfortable thumb target */
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: #78716c;                       /* stone-500 */
+}
+.tab-link > span:first-child { font-size: 1.25rem; line-height: 1.2; }
+.tab-link[aria-current="page"] { color: #D2691E; font-weight: 600; }
+
+/* ---------------- collapsible sections -------------------------- */
+/* Native <details> gives open/close behaviour and keyboard support for free.
+   All we add is hiding the default marker and turning our own chevron. */
+
+details > summary { list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+details[open] > summary .chevron { transform: rotate(180deg); }
+
+/* ---------------- motion --------------------------------------- */
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-up { animation: slide-up .2s ease-out; }
+
+#toasts > div { transition: opacity .25s, transform .25s; }
+
+/* Volunteers using reduced-motion settings should not get spinners flying about. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* ---------------- scanner -------------------------------------- */
+
+.scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+
+/* The clear square in the middle of the camera view. */
+.scanner-reticle {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.scanner-reticle::before {
+  content: "";
+  width: min(70vw, 18rem);
+  aspect-ratio: 1;
+  border: 3px solid rgba(255, 255, 255, .9);
+  border-radius: 1.5rem;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45);
+}
+
+/* ---------------- printing ------------------------------------- */
+/*
+ * A4 sheet of QR labels. Every size here is in millimetres deliberately and
+ * the arithmetic below is load-bearing — do not "tidy" any of it into rem.
+ *
+ *   A4 portrait          210mm wide
+ *   @page margin         10mm each side
+ *   printable width      190mm
+ *
+ *   3 columns x 60mm  +  2 gaps x 4mm  =  188mm      fits, with 2mm to spare
+ *
+ * An earlier version used 4 columns of 45mm with 4mm gaps — 192mm — which is
+ * 2mm WIDER than the page, so the fourth column was silently clipped or
+ * bumped onto its own row. If you change the column count, redo this sum.
+ *
+ *   printable height     277mm
+ *   7 rows x 36mm  +  6 gaps x 4mm  =  276mm         21 labels per sheet
+ *
+ * QR sizing. QR.toSvg is called with quiet: 2, so the SVG box is
+ * (21 modules + 4) = 25 units for a normal asset id:
+ *
+ *   30mm box  x  21/25  =  25.2mm of actual black symbol      >= 25mm minimum
+ *   module size         =  30 / 25 = 1.2mm                    >> 0.5mm floor
+ *
+ * The quiet zone the spec wants (4 modules) is made up of 2 modules inside
+ * the SVG plus the label's own 2.5mm white padding — 2.4mm + 2.5mm = 4.9mm,
+ * against the 4.8mm required. That is why the padding is not decorative.
+ */
+
+@page {
+  size: A4 portrait;
+  margin: 10mm;
+}
+
+@media print {
+  body { background: #fff !important; }
+
+  /* Everything that is not the label sheet disappears. */
+  header, nav, #scan-fab, #toasts, #dialog-host, #scanner-host,
+  .no-print { display: none !important; }
+
+  main { padding: 0 !important; max-width: none !important; }
+
+  .label-sheet {
+    display: grid;
+    grid-template-columns: repeat(3, 60mm);
+    gap: 4mm;
+    justify-content: start;
+  }
+
+  .label {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    border: 0.3mm dashed #bbb;          /* a cutting guide, not decoration */
+    border-radius: 2mm;
+    padding: 2.5mm;                     /* also serves as QR quiet zone — see above */
+    height: 36mm;
+    display: flex;
+    align-items: center;
+    gap: 2.5mm;
+    background: #fff;
+  }
+
+  .label-qr { width: 30mm; height: 30mm; flex: none; }   /* 25.2mm symbol — see above */
+  .label-text { min-width: 0; }
+  .label-id { font-size: 11pt; font-weight: 700; letter-spacing: .02em; line-height: 1.1; }
+  .label-name { font-size: 7pt; line-height: 1.2; margin-top: .8mm; }
+  .label-parent { font-size: 6pt; color: #444; line-height: 1.2; margin-top: .5mm; }
+  .label-org { font-size: 5.5pt; color: #666; line-height: 1.1; margin-top: 1mm; }
+
+  /*
+   * Kit bags get the bigger tag the brief asks for: 40mm of symbol.
+   *   48mm box x 21/25 = 40.3mm symbol
+   * Spans 2 columns (60 + 4 + 60 = 124mm) so the text has room beside it.
+   */
+  .label-bag { grid-column: span 2; height: 54mm; }
+  .label-bag .label-qr { width: 48mm; height: 48mm; }
+  .label-bag .label-id { font-size: 16pt; }
+  .label-bag .label-name { font-size: 9pt; }
+}
+
+/* On screen the sheet is a preview of the same thing. */
+.label-sheet {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.75rem;
+}
+.label {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: #fff;
+  border: 1px dashed #d6d3d1;
+  border-radius: 0.75rem;
+}
+.label-qr { width: 4.5rem; height: 4.5rem; flex: none; }
+.label-qr svg { width: 100%; height: 100%; display: block; }
+.label-text { min-width: 0; }
+.label-id { font-size: 1rem; font-weight: 700; line-height: 1.1; }
+.label-name { font-size: .6875rem; line-height: 1.25; margin-top: .125rem; color: #44403c; }
+.label-parent { font-size: .625rem; line-height: 1.25; margin-top: .125rem; color: #78716c; }
+.label-org { font-size: .5625rem; line-height: 1.2; margin-top: .25rem; color: #a8a29e; }
+.label-bag .label-qr { width: 6.5rem; height: 6.5rem; }
+.label-bag .label-id { font-size: 1.25rem; }

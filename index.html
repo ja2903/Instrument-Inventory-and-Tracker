@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#FAF7F2">
+<title>Instrument Tracker — BAPS London Mandir</title>
+
+<!-- A camera needs a secure context, which is why this is hosted on GitHub Pages (HTTPS). -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪘</text></svg>">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // Tailwind CDN config. One warm accent, as the brief asks for.
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          saffron: {
+            50:  '#FEF7EC', 100: '#FCEAD1', 200: '#F8D2A2', 300: '#F3B56C',
+            400: '#EE9942', 500: '#E67E22', 600: '#D2691E', 700: '#A9500F',
+            800: '#8A4111', 900: '#723712'
+          },
+          sand: {
+            50: '#FAF7F2', 100: '#F5F0E8', 200: '#EAE2D5'
+          }
+        },
+        fontFamily: {
+          sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto',
+                 'Helvetica Neue', 'Arial', 'sans-serif']
+        }
+      }
+    }
+  };
+</script>
+<link rel="stylesheet" href="css/app.css?v=1.4.1">
+</head>
+
+<body class="min-h-full bg-sand-50 font-sans text-stone-800 antialiased">
+
+<!-- ================= access code gate ================= -->
+<div id="unlock" class="fixed inset-0 z-40 hidden items-center justify-center bg-sand-50 p-6">
+  <div class="w-full max-w-sm">
+    <div class="mb-8 text-center">
+      <div class="text-5xl" aria-hidden="true">🪘</div>
+      <h1 class="mt-4 text-2xl font-bold tracking-tight text-stone-900">Instrument Tracker</h1>
+      <p class="mt-1 text-sm text-stone-500">BAPS Shri Swaminarayan Mandir, London</p>
+    </div>
+
+    <form id="unlock-form" class="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-stone-900/5">
+      <label for="unlock-code" class="mb-1.5 block text-sm font-medium text-stone-700">
+        Access code
+      </label>
+      <input type="password" id="unlock-code" name="code" required autocomplete="current-password"
+             inputmode="text" autocapitalize="none" spellcheck="false"
+             class="w-full rounded-xl border-0 bg-white px-3.5 py-3 text-base text-stone-900
+                    shadow-sm ring-1 ring-inset ring-stone-300 focus:outline-none
+                    focus:ring-2 focus:ring-inset focus:ring-saffron-500">
+      <p class="mt-2 text-xs text-stone-500">
+        Everyone shares one code. Ask another karyakar if you do not have it.
+      </p>
+
+      <p id="unlock-error" class="mt-3 hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800"
+         role="alert"></p>
+
+      <button type="submit" id="unlock-submit"
+              class="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-saffron-600
+                     px-5 py-3 text-base font-semibold text-white shadow-sm transition
+                     hover:bg-saffron-700 disabled:opacity-50">
+        Unlock
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- ================= app shell ================= -->
+<div id="shell" class="hidden">
+
+  <header class="sticky top-0 z-30 border-b border-stone-200/80 bg-sand-50/90 backdrop-blur">
+    <div class="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3">
+      <a href="#/" class="flex items-center gap-2.5 text-stone-900">
+        <span class="text-2xl leading-none" aria-hidden="true">🪘</span>
+        <span class="text-base font-bold tracking-tight">Instrument Tracker</span>
+      </a>
+
+      <!--
+        Three places, not six. Giving out and taking back are actions started
+        from the home screen, not destinations — putting them in the nav was
+        what made this feel like a database rather than a tool.
+      -->
+      <nav class="ml-auto hidden items-center gap-1 md:flex" aria-label="Main">
+        <a href="#/"          data-nav="dashboard" class="nav-link">Home</a>
+        <a href="#/inventory" data-nav="inventory" class="nav-link">Instruments</a>
+        <a href="#/events"    data-nav="events"    class="nav-link">Events</a>
+        <a href="#/more"      data-nav="more"      class="nav-link">More</a>
+      </nav>
+
+      <button id="refresh-btn" type="button"
+              class="ml-auto inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm
+                     font-medium text-stone-600 ring-1 ring-inset ring-stone-200 transition
+                     hover:bg-stone-50 hover:text-stone-900 active:scale-95
+                     disabled:opacity-50 md:ml-2">
+        <svg id="refresh-icon" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2"
+             stroke="currentColor" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M16.023 9.348h4.992V4.356M2.985 19.644v-4.992h4.992m-4.03 0a8.25 8.25 0 0 0 13.803 3.7l3.181-3.182m-16.991-2.51a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182"/>
+        </svg>
+        <span id="refresh-label">Refresh</span>
+      </button>
+    </div>
+  </header>
+
+  <main id="screen" class="mx-auto max-w-5xl px-4 pb-40 pt-6 md:pb-16" tabindex="-1"></main>
+
+  <!-- Scan is reachable from everywhere — it is the action volunteers use most. -->
+  <button id="scan-fab" type="button"
+          class="fixed bottom-24 right-5 z-30 flex h-16 w-16 items-center justify-center
+                 rounded-full bg-saffron-600 text-white shadow-lg shadow-saffron-900/20
+                 transition hover:bg-saffron-700 active:scale-95 md:bottom-8">
+    <span class="sr-only">Scan an instrument</span>
+    <svg class="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor"
+         aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round"
+            d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 3.75 9.375v-4.5ZM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5ZM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 13.5 9.375v-4.5Z"/>
+      <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 13.5h3m-3 3h3m-3 3h3m3-6h1.5m-1.5 3h1.5m-1.5 3h1.5"/>
+    </svg>
+  </button>
+
+  <!-- Bottom navigation, mobile only. Large tap targets. -->
+  <nav class="fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+       aria-label="Main">
+    <div class="mx-auto grid max-w-lg grid-cols-4">
+      <a href="#/"          data-nav="dashboard" class="tab-link">
+        <span aria-hidden="true">🏠</span><span>Home</span></a>
+      <a href="#/inventory" data-nav="inventory" class="tab-link">
+        <span aria-hidden="true">🎵</span><span>Instruments</span></a>
+      <a href="#/events"    data-nav="events"    class="tab-link">
+        <span aria-hidden="true">📅</span><span>Events</span></a>
+      <a href="#/more"      data-nav="more"      class="tab-link">
+        <span aria-hidden="true">⋯</span><span>More</span></a>
+    </div>
+  </nav>
+</div>
+
+<!-- ================= overlays ================= -->
+<div id="toasts" class="pointer-events-none fixed inset-x-0 top-4 z-[60] mx-auto flex max-w-sm
+                        flex-col gap-2 px-4"></div>
+<div id="dialog-host"></div>
+<div id="scanner-host"></div>
+
+<!--
+  Load order matters: app.js defines the App object that the screen files
+  register themselves on, so it has to come before them. App.start() runs on
+  DOMContentLoaded, which is after every file here has been parsed.
+-->
+<script src="config.js?v=1.4.1"></script>
+
+<!--
+  The SAME rules the Apps Script backend runs — generated from
+  apps-script/src/10-rules.js by tools/build-gs.js, so the two cannot drift.
+  It lets the browser answer "is this instrument free between these dates?"
+  instantly as you change a date picker, with no round trip. The server still
+  re-checks everything on save; this is for the live UI only.
+-->
+<script src="js/rules.js?v=1.4.1"></script>
+
+<script src="js/qr.js?v=1.4.1"></script>
+<script src="js/ui.js?v=1.4.1"></script>
+<script src="js/api.js?v=1.4.1"></script>
+<script src="js/app.js?v=1.4.1"></script>
+<script src="js/inventory.js?v=1.4.1"></script>
+<script src="js/operations.js?v=1.4.1"></script>
+
+<!--
+  Last line of defence against a blank screen.
+
+  Both panels above start hidden and App.start() reveals one of them. If any
+  file above failed to load — a missing upload, a typo in a path, a server
+  serving 404s — nothing ever gets shown and the page sits there as an empty
+  coloured rectangle, which tells a volunteer nothing at all.
+
+  This checks that the app actually started, and if not, says which file is
+  missing in plain words.
+-->
+<script>
+(function () {
+  var REQUIRED = [
+    { name: 'config.js', ok: function () { return typeof CONFIG !== 'undefined'; } },
+    { name: 'js/rules.js', ok: function () { return typeof Rules !== 'undefined'; } },
+    { name: 'js/qr.js', ok: function () { return typeof QR !== 'undefined'; } },
+    { name: 'js/ui.js', ok: function () { return typeof UI !== 'undefined'; } },
+    { name: 'js/api.js', ok: function () { return typeof Api !== 'undefined'; } },
+    { name: 'js/app.js', ok: function () { return typeof App !== 'undefined'; } },
+    { name: 'js/inventory.js',
+      ok: function () { return typeof App !== 'undefined' && !!App.screens.inventory; } },
+    { name: 'js/operations.js',
+      ok: function () { return typeof App !== 'undefined' && !!App.screens.dashboard; } }
+  ];
+
+  /**
+   * The stylesheet has no global to test for, so ask the browser whether it
+   * actually parsed any rules from it. A 404 leaves a <link> with an empty
+   * sheet — the page still renders, but the print layout and navigation are
+   * quietly wrong, which is worse than an obvious failure.
+   */
+  function stylesheetLoaded() {
+    try {
+      for (var i = 0; i < document.styleSheets.length; i++) {
+        var sheet = document.styleSheets[i];
+        if (!sheet.href || sheet.href.indexOf('app.css') === -1) continue;
+        return !!(sheet.cssRules && sheet.cssRules.length);
+      }
+    } catch (e) {
+      return true;   // blocked by CORS rather than missing — do not cry wolf
+    }
+    return false;
+  }
+
+  function missingFiles() {
+    var missing = [];
+    for (var i = 0; i < REQUIRED.length; i++) {
+      var passed = false;
+      try { passed = REQUIRED[i].ok(); } catch (e) { passed = false; }
+      if (!passed) missing.push(REQUIRED[i].name);
+    }
+    if (!stylesheetLoaded()) missing.push('css/app.css');
+    return missing;
+  }
+
+  function showFailure(missing) {
+    document.body.innerHTML =
+      '<div style="max-width:34rem;margin:3rem auto;padding:1.5rem;font-family:' +
+      '-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#1c1917">' +
+        '<h1 style="font-size:1.25rem;margin:0 0 .75rem">This page did not load properly</h1>' +
+        '<p style="margin:0 0 1rem;line-height:1.5;color:#57534e">' +
+          (missing.length
+            ? 'These files are missing from the website:'
+            : 'The app did not start. Try reloading the page.') +
+        '</p>' +
+        (missing.length
+          ? '<ul style="margin:0 0 1rem;padding-left:1.25rem;line-height:1.7;' +
+            'font-family:ui-monospace,Menlo,monospace;font-size:.875rem">' +
+            missing.map(function (f) { return '<li>' + f + '</li>'; }).join('') +
+            '</ul>' +
+            '<p style="margin:0 0 1rem;line-height:1.5;color:#57534e">' +
+              'If you have just put this on GitHub Pages, upload the missing files, keeping ' +
+              'the same folder names. Everything must sit at the top level of the repository — ' +
+              '<code>index.html</code> in the root, not inside another folder.</p>'
+          : '') +
+        '<button onclick="location.reload(true)" style="border:0;border-radius:.75rem;' +
+          'background:#D2691E;color:#fff;font-size:1rem;font-weight:600;padding:.75rem 1.25rem">' +
+          'Reload</button>' +
+      '</div>';
+  }
+
+  // Give the app a moment to start, then check it actually did.
+  window.addEventListener('load', function () {
+    setTimeout(function () {
+      var missing = missingFiles();
+      var started = document.querySelector('#shell:not(.hidden), #unlock:not(.hidden)');
+      if (missing.length || !started) showFailure(missing);
+    }, 400);
+  });
+})();
+</script>
+</body>
+</html>
