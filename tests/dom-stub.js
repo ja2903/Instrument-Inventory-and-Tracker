@@ -93,9 +93,13 @@ function makeDocument() {
  * Loads the browser files in order and returns the sandbox.
  * `bootstrap` is the payload Api.bootstrap should resolve with.
  */
-function loadBrowserApp(bootstrap) {
+/**
+ * `store` lets two loads share one device's localStorage, which is the only
+ * way to test that something survives the reload that applies it.
+ */
+function loadBrowserApp(bootstrap, store) {
   var ROOT = path.join(__dirname, '..');
-  var store = {};
+  store = store || {};
 
   var sandbox = {
     console: { log: function () {}, warn: function () {}, error: function () {} },
@@ -109,6 +113,7 @@ function loadBrowserApp(bootstrap) {
     document: makeDocument(),
     navigator: { onLine: true, vibrate: function () {} },
     localStorage: {
+      _store: store,
       getItem: function (k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
       setItem: function (k, v) { store[k] = String(v); },
       removeItem: function (k) { delete store[k]; }

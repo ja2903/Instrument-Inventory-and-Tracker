@@ -46,6 +46,14 @@ if (next === current) {
   process.exit(1);
 }
 
+// config.js must stay unstamped — see the comment beside it in index.html.
+// If a stamp ever creeps back on, an edited Sheet URL silently stops taking
+// effect, which is a genuinely baffling failure to debug.
+if (/config\.js\?v=/.test(indexHtml)) {
+  console.error('config.js has a ?v= stamp on it. Remove it — see the note in index.html.');
+  process.exit(1);
+}
+
 var stamps = (indexHtml.match(/\?v=\d+\.\d+\.\d+/g) || []).length;
 fs.writeFileSync(INDEX, indexHtml.split('?v=' + current).join('?v=' + next), 'utf8');
 

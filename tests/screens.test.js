@@ -487,4 +487,70 @@ module.exports = async function () {
       ok(html.indexOf('tickbox') === -1, 'no empty table to print');
     });
   });
+
+  /**
+   * A full re-upload of the repository puts the placeholder config.js back,
+   * which disconnects the app for everybody. It happened. The recovery has to
+   * work from the phone that hit it, not only from a computer with GitHub open.
+   */
+  suite('Recovering from a clobbered config.js', function () {
+
+    function freshApi() {
+      var s = DOM.loadBrowserApp(bootstrapPayload);
+      s.CONFIG.API_URL = 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE';
+      return s;
+    }
+
+    test('the placeholder is treated as not connected', async function () {
+      var s = freshApi();
+      var threw = null;
+      try { await s.Api.ping(); } catch (e) { threw = e; }
+      ok(threw, 'it must not try to fetch the placeholder');
+      eq(threw.code, 'NOT_CONFIGURED');
+    });
+
+    test('a URL entered in the app overrides config.js', function () {
+      var s = freshApi();
+      s.Api.setApiUrl('https://script.google.com/macros/s/AKfycbTEST/exec');
+      eq(s.Api.apiUrl(), 'https://script.google.com/macros/s/AKfycbTEST/exec');
+      ok(s.Api.usingStoredUrl());
+    });
+
+    test('it is remembered on the device, so a reload is enough', function () {
+      var s = freshApi();
+      s.Api.setApiUrl('https://script.google.com/macros/s/AKfycbTEST/exec');
+
+      // A second load of the app, same device: config.js is still broken.
+      var again = DOM.loadBrowserApp(bootstrapPayload, s.window.localStorage._store);
+      again.CONFIG.API_URL = 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE';
+      eq(again.Api.apiUrl(), 'https://script.google.com/macros/s/AKfycbTEST/exec',
+         'the address must survive the reload that applies it');
+    });
+
+    test('the /dev address is refused, with the reason', function () {
+      var s = freshApi();
+      var threw = null;
+      try {
+        s.Api.setApiUrl('https://script.google.com/macros/s/AKfycbTEST/dev');
+      } catch (e) { threw = e; }
+      ok(threw && /\/exec/.test(threw.message),
+         'the /dev URL only works for the signed-in owner — say so');
+    });
+
+    test('something that is not an Apps Script address is refused', function () {
+      var s = freshApi();
+      [['', 'blank'], ['hello', 'nonsense'],
+       ['https://example.com/exec', 'wrong host']].forEach(function (pair) {
+        var threw = null;
+        try { s.Api.setApiUrl(pair[0]); } catch (e) { threw = e; }
+        ok(threw, pair[1] + ' should be refused');
+      });
+    });
+
+    test('a trailing slash is tolerated', function () {
+      var s = freshApi();
+      s.Api.setApiUrl('https://script.google.com/macros/s/AKfycbTEST/exec/');
+      eq(s.Api.apiUrl(), 'https://script.google.com/macros/s/AKfycbTEST/exec');
+    });
+  });
 };

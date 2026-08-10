@@ -493,9 +493,7 @@ var App = (function () {
         showUnlock('Please enter the access code.');
       } else if (e.code === 'NOT_CONFIGURED' || e.code === 'BAD_DEPLOYMENT') {
         hideUnlock();
-        document.getElementById('screen').innerHTML =
-          UI.pageTitle('Not set up yet') +
-          UI.errorPanel('This app is not connected to a Google Sheet', e.message);
+        document.getElementById('screen').innerHTML = connectScreen(e.message);
       } else {
         hideUnlock();
         document.getElementById('screen').innerHTML =
@@ -503,6 +501,39 @@ var App = (function () {
             UI.button('Try again', { action: 'hard-reload' }));
       }
     }
+  }
+
+  /**
+   * "Not connected" with a way out of it.
+   *
+   * This used to be a dead end: a paragraph telling you to edit config.js on
+   * GitHub, shown on the phone of somebody standing in a store room. The most
+   * common cause is also the most avoidable — re-uploading every file puts the
+   * placeholder config.js back — so the screen now takes the address directly
+   * and remembers it on the device.
+   */
+  function connectScreen(message) {
+    return UI.pageTitle('Connect to your Google Sheet') +
+      UI.errorPanel('This app is not connected yet', message) +
+
+      UI.card(
+        '<label for="api-url" class="block text-sm font-medium text-stone-900">' +
+          'Apps Script web app address</label>' +
+        '<p class="mt-0.5 mb-3 text-sm text-stone-500">' +
+          'In the Apps Script editor: <strong>Deploy → Manage deployments</strong>, and copy ' +
+          'the Web app URL. It ends in <code>/exec</code>.</p>' +
+
+        UI.input('api-url', Api.apiUrl().indexOf('PASTE_YOUR') === 0 ? '' : Api.apiUrl(),
+          { id: 'api-url', type: 'url', autocomplete: 'off',
+            placeholder: 'https://script.google.com/macros/s/…/exec' }) +
+
+        '<div class="mt-3 flex flex-wrap gap-2">' +
+          UI.button('Connect', { action: 'save-api-url', id: 'save-api-url' }) +
+        '</div>' +
+
+        '<p class="mt-3 text-xs text-stone-500">' +
+          'Saved on this device only. Anyone else opening the app uses whatever is in ' +
+          'config.js, so put it there too when you get to a computer.</p>');
   }
 
   return {
@@ -529,6 +560,30 @@ var App = (function () {
     lastName: lastName, rememberName: rememberName
   };
 })();
+
+/**
+ * Save the web app address typed on the "not connected" screen.
+ *
+ * Registered out here rather than inside the module because App.actions only
+ * exists once the module has returned.
+ */
+App.actions['save-api-url'] = function (button) {
+  var field = document.getElementById('api-url');
+  var restore = UI.busy(button, 'Connecting…');
+
+  try {
+    Api.setApiUrl(field ? field.value : '');
+  } catch (e) {
+    restore();
+    UI.toast(e.message, 'error');
+    return;
+  }
+
+  // A full reload rather than a re-render: the app has already failed to
+  // start, and restarting it cleanly is more predictable than patching it
+  // back to life from the middle.
+  window.location.reload();
+};
 
 /* ---------------- the "More" screen (mobile only) ------------------ */
 

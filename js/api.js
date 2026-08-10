@@ -30,14 +30,66 @@ var Api = (function () {
   'use strict';
 
   var STORAGE_KEY = 'instrument_tracker_access_code';
+  var URL_KEY = 'instrument_tracker_api_url';
   var accessCode = '';
+  var storedUrl = '';
 
   try {
     accessCode = window.localStorage.getItem(STORAGE_KEY) || '';
+    storedUrl = window.localStorage.getItem(URL_KEY) || '';
   } catch (e) {
     // Private browsing with storage blocked: the code just has to be
     // re-entered each session rather than the app refusing to start.
     accessCode = '';
+    storedUrl = '';
+  }
+
+  /**
+   * Which Sheet this app talks to.
+   *
+   * config.js is the normal answer, but it is also the one file a person edits
+   * by hand and the one file a full re-upload silently overwrites with the
+   * placeholder — which strands everybody with "not connected" and no way back
+   * except GitHub. So a URL entered in the app itself wins, and is remembered
+   * on the device. That makes the failure recoverable from the phone that hit
+   * it, which is where the person actually is.
+   */
+  function apiUrl() {
+    if (storedUrl) return storedUrl;
+    return (typeof CONFIG !== 'undefined' && CONFIG.API_URL) || '';
+  }
+
+  function isPlaceholder(url) {
+    return !url || url.indexOf('PASTE_YOUR') === 0;
+  }
+
+  /** Accepts the /exec URL, rejecting the mistakes people actually make. */
+  function setApiUrl(url) {
+    var clean = String(url || '').trim();
+
+    if (!clean) throw new ApiError('BAD_REQUEST', 'Paste the web app URL first.');
+    if (clean.indexOf('script.google.com') === -1) {
+      throw new ApiError('BAD_REQUEST',
+        'That does not look like an Apps Script address. It should start ' +
+        'https://script.google.com/macros/s/…');
+    }
+    if (/\/dev\/?$/.test(clean)) {
+      throw new ApiError('BAD_REQUEST',
+        'That is the /dev address, which only works for you while signed in. ' +
+        'Use the one ending in /exec from Deploy → Manage deployments.');
+    }
+    if (!/\/exec\/?$/.test(clean)) {
+      throw new ApiError('BAD_REQUEST', 'The address needs to end in /exec.');
+    }
+
+    storedUrl = clean.replace(/\/$/, '');
+    try { window.localStorage.setItem(URL_KEY, storedUrl); } catch (e) {}
+    return storedUrl;
+  }
+
+  function clearApiUrl() {
+    storedUrl = '';
+    try { window.localStorage.removeItem(URL_KEY); } catch (e) {}
   }
 
   function ApiError(code, message, extra) {
@@ -61,10 +113,10 @@ var Api = (function () {
   }
 
   function assertConfigured() {
-    if (!CONFIG.API_URL || CONFIG.API_URL.indexOf('PASTE_YOUR') === 0) {
+    if (isPlaceholder(apiUrl())) {
       throw new ApiError('NOT_CONFIGURED',
-        'This app has not been connected to a Google Sheet yet. ' +
-        'Open config.js and paste in the Apps Script web app URL — see README.md.');
+        'This app is not connected to a Google Sheet. Paste the Apps Script web app ' +
+        'address below and it will remember it on this device.');
     }
   }
 
@@ -129,7 +181,7 @@ var Api = (function () {
 
     var response;
     try {
-      response = await fetch(CONFIG.API_URL + '?' + query.toString(), {
+      response = await fetch(apiUrl() + '?' + query.toString(), {
         method: 'GET',
         redirect: 'follow'    // Apps Script always redirects to googleusercontent.com
       });
@@ -144,7 +196,7 @@ var Api = (function () {
 
     var response;
     try {
-      response = await fetch(CONFIG.API_URL, {
+      response = await fetch(apiUrl(), {
         method: 'POST',
         // text/plain keeps this a CORS "simple request" — see the note above.
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -166,6 +218,11 @@ var Api = (function () {
     getCode: getCode,
     setCode: setCode,
     clearCode: clearCode,
+
+    apiUrl: apiUrl,
+    setApiUrl: setApiUrl,
+    clearApiUrl: clearApiUrl,
+    usingStoredUrl: function () { return !!storedUrl; },
 
     ping: function () { return get('ping'); },
     bootstrap: function () { return get('bootstrap'); },

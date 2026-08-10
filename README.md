@@ -626,7 +626,29 @@ Pages has not finished publishing. Check the repository's **Actions** tab for th
 minutes. If there is no job at all, go to **Settings → Pages** and confirm **Branch: main** and
 **Folder: / (root)**, and that the repository is **Public**.
 
-### "This app has not been connected to a Google Sheet yet"
+### "This app is not connected to a Google Sheet"
+
+Almost always caused by **re-uploading every file to GitHub**, which puts the blank `config.js`
+from this project back over the one you filled in. Nothing is lost — the Sheet is untouched — the
+app has just forgotten which Sheet is yours.
+
+**Fix it from the phone in your hand:** the screen has a box on it. Paste the Apps Script web app
+address (Apps Script editor → **Deploy → Manage deployments** → copy the Web app URL, ending in
+`/exec`) and press **Connect**. The app remembers it on that device and starts working again
+immediately.
+
+That fixes *your* phone. To fix it for everybody, put the address back into `config.js` on GitHub
+as well:
+
+1. Open **`config.js`** in your repository, click the pencil.
+2. Replace `PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE` with your `/exec` address, keeping the quotes.
+3. **Commit changes**, wait two minutes, reload.
+
+> **To avoid it next time**, do not re-upload `config.js`. When uploading a new version, upload
+> only the files that changed. If you do drag everything in, GitHub will show `config.js` in the
+> list of changes — delete it from that list before committing.
+
+### "This app has not been connected to a Google Sheet yet" (older versions)
 
 `config.js` still has the placeholder in it. Go back to **Step 5.4** and paste in your Apps Script
 web app URL.

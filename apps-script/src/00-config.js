@@ -5,7 +5,7 @@
  * Everything in this file is data. No SpreadsheetApp calls, no logic.
  */
 
-var APP_VERSION = '1.4.14';
+var APP_VERSION = '1.4.16';
 var TIMEZONE = 'Europe/London';
 
 /** Script Property keys. The access code lives here, NOT in the Sheet. */
