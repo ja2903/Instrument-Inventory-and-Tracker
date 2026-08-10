@@ -14,7 +14,7 @@
  */
 
 var CONFIG = {
-  API_URL: 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE',
+  API_URL: 'https://script.google.com/macros/s/AKfycbyE2nHvt7kyP1yKVOT6mviaPZnrALGjjS8G54vN0lveT6t1jP78-Bd684g7DNb7lW0K/exec',
 
   /** Shown in the header and printed at the bottom of every QR label. */
   ORGANISATION: 'BAPS London Mandir',
