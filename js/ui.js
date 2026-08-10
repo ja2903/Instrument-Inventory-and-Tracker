@@ -171,6 +171,62 @@ var UI = (function () {
     return Math.round(base64.length * 3 / 4 / 1024);
   }
 
+  /**
+   * A photo, full screen.
+   *
+   * Damage is often a hairline crack or a small tear, and the thumbnail on a
+   * history row is far too small to judge it. Tapping opens the picture as
+   * large as the screen allows.
+   */
+  function showPhoto(url, caption) {
+    var host = document.getElementById('scanner-host');
+
+    function close() {
+      host.innerHTML = '';
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('keydown', onKey);
+
+    host.innerHTML =
+      '<div class="fixed inset-0 z-[70] flex flex-col bg-stone-900/95" data-photo-backdrop>' +
+        '<div class="flex items-center gap-3 px-4 py-3">' +
+          '<span class="min-w-0 flex-1 truncate text-sm font-medium text-white">' +
+            esc(caption || '') + '</span>' +
+          '<button type="button" data-photo-close ' +
+            'class="rounded-lg px-3 py-2 text-sm font-medium text-white/80 ' +
+            'hover:bg-white/10">Close</button>' +
+        '</div>' +
+        '<div class="flex flex-1 items-center justify-center p-3">' +
+          '<img src="' + esc(url) + '" alt="' + esc(caption || 'Photo') + '" ' +
+            'class="max-h-full max-w-full rounded-lg object-contain">' +
+        '</div>' +
+        '<div class="px-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-center">' +
+          '<a href="' + esc(url) + '" target="_blank" rel="noopener" ' +
+            'class="text-xs text-white/60 underline">Open the original</a>' +
+        '</div>' +
+      '</div>';
+
+    host.querySelector('[data-photo-close]').addEventListener('click', close);
+    host.querySelector('[data-photo-backdrop]').addEventListener('click', function (e) {
+      if (e.target === this) close();
+    });
+  }
+
+  /** A small tappable thumbnail for a history row. */
+  function photoThumb(url, label) {
+    if (!url) return '';
+    return '<button type="button" data-action="view-photo" ' +
+      'data-value="' + esc(url) + '" data-caption="' + esc(label || '') + '" ' +
+      'class="group relative overflow-hidden rounded-lg ring-1 ring-stone-200 ' +
+      'transition hover:ring-saffron-400">' +
+      '<img src="' + esc(url) + '" alt="' + esc(label || 'Photo') + '" ' +
+        'class="h-16 w-16 object-cover" loading="lazy">' +
+      '<span class="absolute inset-x-0 bottom-0 bg-stone-900/60 px-1 py-0.5 text-[0.6rem] ' +
+        'font-medium text-white">' + esc(label || '') + '</span>' +
+    '</button>';
+  }
+
   /* ---------------- building blocks -------------------------------- */
 
   function card(inner, extraClass) {
@@ -451,6 +507,7 @@ var UI = (function () {
 
   return {
     shrinkImage: shrinkImage, dataUrlKb: dataUrlKb,
+    showPhoto: showPhoto, photoThumb: photoThumb,
     esc: esc, dayMonth: dayMonth, fullDate: fullDate, timestamp: timestamp,
     plural: plural, daysLate: daysLate, today: today,
     STATUS: STATUS, statusKey: statusKey, statusPill: statusPill, statusLabel: statusLabel,

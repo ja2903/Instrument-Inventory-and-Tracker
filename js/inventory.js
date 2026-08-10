@@ -457,8 +457,125 @@
         ? '<p class="mt-1 rounded-lg bg-amber-50 px-2.5 py-1.5 text-sm text-amber-900">' +
           UI.esc(m.damage_notes) + '</p>'
         : '') +
+
+      // Photos taken as it left and as it came back. Stored all along; they
+      // simply were not being shown, which made taking them feel pointless.
+      '<div class="mt-2 flex flex-wrap items-center gap-2">' +
+        UI.photoThumb(m.photo_out_url, 'Going out') +
+        UI.photoThumb(m.photo_in_url, m.outcome === 'damaged' ? 'Damage' : 'Coming back') +
+
+        '<button type="button" data-action="movement-photo" ' +
+          'data-value="' + UI.esc(m.movement_id) + '" ' +
+          'data-kind="' + (m.checked_in_at ? 'in' : 'out') + '" ' +
+          'class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-stone-500 ' +
+          'ring-1 ring-inset ring-stone-200 hover:bg-stone-50">' +
+          (m.checked_in_at
+            ? (m.photo_in_url ? 'Retake' : '📷 Add photo')
+            : (m.photo_out_url ? 'Retake' : '📷 Add photo')) +
+        '</button>' +
+      '</div>' +
     '</li>';
   }
+
+  /**
+   * The most recent damaged or missing return, if the item is still out of
+   * action because of it. Returns '' once the item is back in use — old
+   * damage that has since been repaired belongs in the history, not at the top.
+   */
+  function damagePanel(loaded, item) {
+    if (!loaded) return '';
+    if (item.status !== 'maintenance' && item.status !== 'lost') return '';
+
+    var incident = null;
+    for (var i = 0; i < loaded.movements.length; i++) {   // newest first
+      var m = loaded.movements[i];
+      if (m.outcome === 'damaged' || m.outcome === 'missing') { incident = m; break; }
+    }
+    if (!incident) return '';
+
+    var lost = incident.outcome === 'missing';
+    return '<div class="mb-4 overflow-hidden rounded-2xl ' +
+      (lost ? 'bg-rose-50 ring-1 ring-rose-200' : 'bg-amber-50 ring-1 ring-amber-200') + '">' +
+      '<div class="p-4">' +
+        '<h2 class="text-base font-semibold ' +
+          (lost ? 'text-rose-900' : 'text-amber-900') + '">' +
+          (lost ? 'Not returned' : 'Damaged') + '</h2>' +
+        '<p class="mt-0.5 text-sm ' + (lost ? 'text-rose-800' : 'text-amber-800') + '">' +
+          UI.esc(incident.damage_notes || 'No note was left.') + '</p>' +
+        '<p class="mt-1 text-xs ' + (lost ? 'text-rose-700/80' : 'text-amber-700/80') + '">' +
+          UI.esc([incident.centre, incident.event_name, incident.sub_event_name]
+            .filter(Boolean).join(' — ')) +
+          (incident.checked_in_at ? ' · ' + UI.esc(UI.timestamp(incident.checked_in_at)) : '') +
+          (incident.checked_in_by ? ' · ' + UI.esc(incident.checked_in_by) : '') + '</p>' +
+      '</div>' +
+
+      (incident.photo_in_url
+        ? '<button type="button" data-action="view-photo" ' +
+            'data-value="' + UI.esc(incident.photo_in_url) + '" ' +
+            'data-caption="' + UI.esc(item.name + ' — ' + (lost ? 'last seen' : 'damage')) + '" ' +
+            'class="block w-full">' +
+            '<img src="' + UI.esc(incident.photo_in_url) + '" ' +
+              'alt="Photo of the damage to ' + UI.esc(item.name) + '" ' +
+              'class="max-h-72 w-full bg-white object-contain">' +
+          '</button>'
+        : '<p class="px-4 pb-3 text-xs ' + (lost ? 'text-rose-700' : 'text-amber-700') + '">' +
+          'No photo was taken.</p>') +
+
+      '<div class="flex gap-2 px-4 py-3">' +
+        '<button type="button" data-action="movement-photo" ' +
+          'data-value="' + UI.esc(incident.movement_id) + '" data-kind="in" ' +
+          'class="rounded-lg bg-white px-3 py-2 text-xs font-semibold ' +
+          (lost ? 'text-rose-800' : 'text-amber-900') + ' ring-1 ring-inset ' +
+          (lost ? 'ring-rose-200' : 'ring-amber-200') + '">' +
+          (incident.photo_in_url ? '📷 Retake the photo' : '📷 Add a photo') + '</button>' +
+        (incident.photo_out_url
+          ? '<button type="button" data-action="view-photo" ' +
+            'data-value="' + UI.esc(incident.photo_out_url) + '" ' +
+            'data-caption="' + UI.esc(item.name + ' — before it went out') + '" ' +
+            'class="rounded-lg bg-white px-3 py-2 text-xs font-medium text-stone-600 ' +
+            'ring-1 ring-inset ring-stone-200">Compare with before</button>'
+          : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  App.actions['view-photo'] = function (button) {
+    UI.showPhoto(button.dataset.value, button.dataset.caption || '');
+  };
+
+  /**
+   * Take a photo against a past movement, replacing whatever is there.
+   *
+   * The first attempt is often taken in a hurry in a badly lit store room, and
+   * a clearer one of the same damage is strictly better. The old file stays in
+   * Drive — the row just stops pointing at it — so retaking can never destroy
+   * the earlier evidence.
+   */
+  App.actions['movement-photo'] = async function (button) {
+    var movementId = button.dataset.value;
+    var kind = button.dataset.kind === 'out' ? 'out' : 'in';
+    var item = App.itemById(detailCache.assetId) || {};
+
+    var dataUrl = await App.takePhoto(item.name || 'Photo');
+    if (!dataUrl) return;
+
+    var restore = UI.busy(button, 'Uploading…');
+    try {
+      var uploaded = await Api.uploadPhoto({
+        data_url: dataUrl, asset_id: detailCache.assetId, kind: kind
+      });
+      await Api.setMovementPhoto({
+        movement_id: movementId, kind: kind, photo_url: uploaded.photo_url
+      });
+
+      detailCache = { assetId: null, data: null };
+      UI.toast('Photo saved', 'success');
+      await App.refresh({ showSpinner: false });
+    } catch (e) {
+      App.handleError(e);
+      restore();
+    }
+  };
 
   var detailCache = { assetId: null, data: null };
 
@@ -505,6 +622,14 @@
       '</div>' +
 
       '<div class="grid gap-4 lg:grid-cols-2">' +
+        /*
+         * The damage photo, right at the top, whenever the item is out of
+         * action. If a harmonium is in maintenance, "what is wrong with it"
+         * is the only question anyone opening this page has — burying the
+         * answer three screens down in the history was the wrong call.
+         */
+        damagePanel(loaded, item) +
+
         UI.card(
           '<h2 class="mb-2 text-base font-semibold text-stone-900">Details</h2><dl>' +
           attributeRow('Instrument type', UI.esc(item.instrument_type)) +

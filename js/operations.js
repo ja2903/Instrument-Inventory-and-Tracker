@@ -350,6 +350,27 @@
 
   var lastCode = '', lastCodeAt = 0, stopCamera = null;
 
+  /*
+   * Which screen the running camera belongs to.
+   *
+   * This used to be an exemption list of hashes that were allowed to keep the
+   * camera — and #/give was on it, for the scanner panel inside the flow. So
+   * routing from the Scan screen to #/give matched the exemption, the detect
+   * loop was never stopped, and it kept firing four times a second into a
+   * video element that was no longer on the page. Owning it by screen is
+   * unambiguous: a different screen means release it.
+   */
+  var cameraOwner = null;
+
+  function releaseCamera() {
+    if (stopCamera) stopCamera();
+    stopCamera = null;
+    cameraOwner = null;
+    // Let the next scan of the same sticker through immediately.
+    lastCode = '';
+    lastCodeAt = 0;
+  }
+
   function scanFeedback(ok) {
     if (navigator.vibrate) navigator.vibrate(ok ? 40 : [40, 60, 40]);
   }
@@ -472,14 +493,11 @@
     }
   }
 
-  /** Release the camera whenever we leave a screen that was using it. */
+  /** Release the camera the moment we are on a different screen than started it. */
   window.addEventListener('hashchange', function () {
-    var hash = window.location.hash || '';
-    if (stopCamera && hash.indexOf('#/give') !== 0 && hash.indexOf('#/back') !== 0 &&
-        hash.indexOf('#/scan') !== 0) {
-      stopCamera();
-      stopCamera = null;
-    }
+    if (!stopCamera) return;
+    var screen = (window.location.hash || '#/').replace(/^#\//, '').split('/')[0] || 'dashboard';
+    if (screen !== cameraOwner) releaseCamera();
   });
 
   /** The camera panel plus its typing box — shared by both flows. */
@@ -532,13 +550,13 @@
     var panel = form.closest('details');
     panel.addEventListener('toggle', async function () {
       if (panel.open && !stopCamera) {
+        cameraOwner = App.route.name;
         stopCamera = await startCamera(async function (code) {
           var item = await resolveCode(code);
           if (item) onItem(item);
         });
       } else if (!panel.open && stopCamera) {
-        stopCamera();
-        stopCamera = null;
+        releaseCamera();
       }
     });
   }
@@ -1033,7 +1051,38 @@
     var g = giveState();
     var takingNow = g.when === 'now';
 
+    var alreadyChosen = giveChosenIds().map(App.itemById).filter(Boolean);
+
     return stepHeader('Who is taking them?', 1, 3) +
+
+      /*
+       * Anything already scanned or picked, shown here on step 1.
+       *
+       * Without this a volunteer who scanned a sticker landed on a form with
+       * no sign the scan had registered — so they scanned again, and again.
+       * Step 1 asks about the event, but it still has to acknowledge what is
+       * in the basket.
+       */
+      (alreadyChosen.length
+        ? '<div class="mb-4 rounded-2xl bg-saffron-50 p-3 ring-1 ring-saffron-200">' +
+            '<p class="mb-2 text-sm font-semibold text-saffron-900">' +
+              UI.plural(alreadyChosen.length, 'instrument') + ' ready to go out</p>' +
+            '<div class="flex flex-wrap gap-1.5">' +
+              alreadyChosen.map(function (item) {
+                return '<span class="inline-flex items-center gap-1.5 rounded-lg bg-white ' +
+                  'px-2.5 py-1 text-xs font-medium text-stone-700 ring-1 ring-stone-200">' +
+                  UI.esc(item.name) +
+                  '<button type="button" data-action="give-drop" ' +
+                    'data-value="' + UI.esc(item.asset_id) + '" ' +
+                    'class="text-stone-400 hover:text-red-600" ' +
+                    'aria-label="Remove ' + UI.esc(item.name) + '">\u00d7</button>' +
+                '</span>';
+              }).join('') +
+            '</div>' +
+            '<p class="mt-2 text-xs text-saffron-800">' +
+              'Answer the questions below, then you can add more on the next step.</p>' +
+          '</div>'
+        : '') +
 
       UI.card(
         '<div class="space-y-5">' +
@@ -1126,6 +1175,12 @@
       }
     });
   }
+
+  App.actions['give-drop'] = function (button) {
+    delete giveState().chosen[button.dataset.value];
+    readGiveForm();
+    App.render();
+  };
 
   App.actions['give-when'] = function (button) {
     var g = giveState();
@@ -2408,6 +2463,12 @@
     });
   }
 
+  /*
+   * The camera sheet is defined here with the rest of the scanning code, but
+   * the item page needs it too — for retaking a damage photo months later.
+   */
+  App.takePhoto = takePhoto;
+
   /** Takes a photo, uploads it, and hands the resulting Drive link back. */
   function wirePhotoFields(host, onUploaded) {
     function upload(assetId, kind, dataUrl) {
@@ -2590,29 +2651,47 @@
   };
 
   App.screens.scan.mount = async function () {
+    /*
+     * One scan, one route.
+     *
+     * The camera fires four times a second, so without this latch a sticker
+     * held in view produces a stream of hits. Each one used to reset the
+     * basket and toast again — which is how a single dholak announced itself
+     * twenty times and added nothing.
+     */
+    var routed = false;
+
     async function handle(code) {
+      if (routed) return;
       var item = await resolveCode(code);
       if (!item) return;
-      scanFeedback(true);
 
-      // Route by what the item is actually doing right now.
+      routed = true;
+      scanFeedback(true);
+      releaseCamera();          // before navigating, not after
+
+      // Route by what the item is actually doing right now. Both flows use
+      // their live state rather than resetting it, so anything already in the
+      // basket survives — including a previous scan.
       if (item.status === 'checked_out') {
         var target = item;
         if (item.live && item.live.via_parent_asset_id) {
           var parent = App.itemById(item.live.via_parent_asset_id);
           if (parent && parent.status === 'checked_out') target = parent;
         }
-        resetBack().chosen[target.asset_id] = true;
-        UI.toast(target.name + ' — taking it back in', 'success');
+        backState().chosen[target.asset_id] = true;
+        backState().step = 1;
+        UI.toast('Added ' + target.name + ' to take back', 'success');
         App.go('#/back');
         return;
       }
 
       if (item.status === 'available') {
-        var give = item.parent_asset_id ? App.itemById(item.parent_asset_id) : item;
-        var g = resetGive();
-        g.chosen[(give || item).asset_id] = true;
-        UI.toast((give || item).name + ' — giving it out', 'success');
+        var whole = item.parent_asset_id ? App.itemById(item.parent_asset_id) : item;
+        var target2 = whole || item;
+        var g = giveState();
+        g.chosen[target2.asset_id] = true;
+        UI.toast('Added ' + target2.name + ' to give out', 'success');
         App.go('#/give');
         return;
       }
@@ -2628,20 +2707,22 @@
       input.value = '';
     });
 
-    if (stopCamera) { stopCamera(); stopCamera = null; }
+    releaseCamera();
+    cameraOwner = 'scan';
     stopCamera = await startCamera(handle);
   };
 
   /** Item detail's buttons drop straight into the right flow. */
   App.actions['quick-checkout'] = function (button) {
-    var g = resetGive();
+    var g = giveState();
     g.chosen[button.dataset.value] = true;
-    g.step = 1;
     App.go('#/give');
   };
 
   App.actions['quick-checkin'] = function (button) {
-    resetBack().chosen[button.dataset.value] = true;
+    var b = backState();
+    b.chosen[button.dataset.value] = true;
+    b.step = 1;
     App.go('#/back');
   };
 

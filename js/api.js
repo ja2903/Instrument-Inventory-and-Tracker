@@ -186,6 +186,7 @@ var Api = (function () {
     deleteEvent: function (payload) { return post('deleteEvent', payload); },
     bulkCheckinEvent: function (payload) { return post('bulkCheckinEvent', payload); },
     uploadPhoto: function (payload) { return post('uploadPhoto', payload); },
+    setMovementPhoto: function (payload) { return post('setMovementPhoto', payload); },
     saveSettings: function (payload) { return post('saveSettings', payload); }
   };
 })();
