@@ -33,7 +33,7 @@
     }
   };
 </script>
-<link rel="stylesheet" href="css/app.css?v=1.4.14">
+<link rel="stylesheet" href="css/app.css?v=1.4.16">
 </head>
 
 <body class="min-h-full bg-sand-50 font-sans text-stone-800 antialiased">
@@ -153,7 +153,17 @@
   register themselves on, so it has to come before them. App.start() runs on
   DOMContentLoaded, which is after every file here has been parsed.
 -->
-<script src="config.js?v=1.4.14"></script>
+<!--
+  config.js carries NO ?v= stamp, deliberately.
+
+  Every other file here is stamped so a new release forces phones to fetch
+  it. config.js is different: it changes when somebody edits the Sheet URL,
+  which has nothing to do with the app version. Stamping it meant an edit to
+  config.js stayed invisible behind the cached copy until the app version
+  happened to change too — so "I fixed config.js and it still says not
+  connected" was a real and very confusing failure. Leave it unstamped.
+-->
+<script src="config.js"></script>
 
 <!--
   The SAME rules the Apps Script backend runs — generated from
@@ -162,14 +172,14 @@
   instantly as you change a date picker, with no round trip. The server still
   re-checks everything on save; this is for the live UI only.
 -->
-<script src="js/rules.js?v=1.4.14"></script>
+<script src="js/rules.js?v=1.4.16"></script>
 
-<script src="js/qr.js?v=1.4.14"></script>
-<script src="js/ui.js?v=1.4.14"></script>
-<script src="js/api.js?v=1.4.14"></script>
-<script src="js/app.js?v=1.4.14"></script>
-<script src="js/inventory.js?v=1.4.14"></script>
-<script src="js/operations.js?v=1.4.14"></script>
+<script src="js/qr.js?v=1.4.16"></script>
+<script src="js/ui.js?v=1.4.16"></script>
+<script src="js/api.js?v=1.4.16"></script>
+<script src="js/app.js?v=1.4.16"></script>
+<script src="js/inventory.js?v=1.4.16"></script>
+<script src="js/operations.js?v=1.4.16"></script>
 
 <!--
   Last line of defence against a blank screen.
