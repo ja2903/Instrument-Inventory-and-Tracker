@@ -211,9 +211,37 @@ var App = (function () {
     return subEventsOf(eventId).slice().sort(byEventDate);
   }
 
-  /** Finished and cancelled events are archived — kept, but out of the way. */
+  /**
+   * Is this event finished with?
+   *
+   * Derived, not manually marked — in practice nobody remembers to go back and
+   * set an event to "completed" after the mahotsav, so relying on the status
+   * alone means the Finished list stays empty and the live list grows forever.
+   *
+   * An event is done when its end date has passed AND nothing is still out for
+   * it. The second half matters: a sabha that ended yesterday with a harmonium
+   * unaccounted for is emphatically not finished.
+   */
   function isArchivedEvent(event) {
-    return !!event && (event.status === 'completed' || event.status === 'cancelled');
+    if (!event) return false;
+    if (event.status === 'completed' || event.status === 'cancelled') return true;
+
+    var end = event.end_date || event.start_date;
+    if (!end) return false;                                  // undated: never auto-archived
+    if (!data || !data.today || end >= data.today) return false;
+
+    return !eventHasItemsOut(event.event_id);
+  }
+
+  /** Anything still out against this event or one of its sub-events. */
+  function eventHasItemsOut(eventId) {
+    var ids = {};
+    ids[eventId] = true;
+    subEventsOf(eventId).forEach(function (s) { ids[s.event_id] = true; });
+
+    return itemsOut().some(function (i) {
+      return ids[i.live.event_id] || ids[i.live.sub_event_id];
+    });
   }
 
   /**
@@ -226,6 +254,19 @@ var App = (function () {
    *
    * Finished events are still offered, below a divider, because instruments do
    * genuinely come back against an event that has already ended.
+   */
+  /**
+   * Events for a dropdown, soonest first, sub-events indented under their
+   * parent. One level of nesting, exactly as the brief asks.
+   *
+   * Finished events are LEFT OUT. Nobody gives instruments out to an event
+   * that has already happened, and once a few years of sabhas have gone by
+   * they would drown the handful of dates anyone is actually choosing between.
+   * Amending something after the fact is done from the Events archive, where
+   * that event can be opened directly.
+   *
+   * Pass true to include them anyway — the Instruments filter does, because
+   * there you are searching history rather than planning.
    */
   function eventOptions(includeArchived) {
     var live = [];
@@ -244,7 +285,7 @@ var App = (function () {
       });
     });
 
-    if (!archived.length || includeArchived === 'none') return live;
+    if (!includeArchived || !archived.length) return live;
     return live
       .concat([{ value: '', label: '\u2500\u2500 finished \u2500\u2500', disabled: true }])
       .concat(archived);
@@ -364,6 +405,11 @@ var App = (function () {
   /* ---------------- start-up --------------------------------------- */
 
   async function start() {
+    // Set synchronously, before anything that can wait. The missing-file guard
+    // in index.html reads this to tell "the app never started" apart from
+    // "the app started and is waiting for a slow server".
+    window.__instrumentTrackerStarted = true;
+
     document.getElementById('unlock-form').addEventListener('submit', async function (e) {
       e.preventDefault();
       var button = document.getElementById('unlock-submit');
@@ -427,9 +473,19 @@ var App = (function () {
       return;
     }
 
+    /*
+     * Show the shell and a spinner BEFORE waiting for the Sheet.
+     *
+     * Apps Script cold-starts can take several seconds. Waiting first and
+     * revealing afterwards left the window completely blank for that whole
+     * time — indistinguishable, to anyone looking at it, from a broken page.
+     */
+    hideUnlock();
+    document.getElementById('screen').innerHTML =
+      UI.spinner('Loading your instruments…');
+
     try {
       await loadData();
-      hideUnlock();
       render();
     } catch (e) {
       if (e.code === 'BAD_CODE') {
@@ -465,6 +521,7 @@ var App = (function () {
     subEventsOf: subEventsOf, eventPath: eventPath, eventOptions: eventOptions,
     topLevelEventsSorted: topLevelEventsSorted, subEventsSorted: subEventsSorted,
     isArchivedEvent: isArchivedEvent, byEventDate: byEventDate,
+    eventHasItemsOut: eventHasItemsOut,
     activeCentres: activeCentres, activeTypes: activeTypes, activeGrades: activeGrades,
     itemsOut: itemsOut, overdueItems: overdueItems,
     availabilityState: availabilityState, conflictsFor: conflictsFor,

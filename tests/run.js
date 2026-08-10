@@ -16,9 +16,16 @@ var path = require('path');
 
 console.log('\n\x1b[1mInstrument Tracker\x1b[0m');
 
+/*
+ * Test modules may be async — the screen tests have to let a promise resolve
+ * before they can render anything, and a synchronous spin loop can never do
+ * that. So every module is awaited, whether it needs it or not.
+ */
+async function main() {
+
 // Unit tests: the pure rules, loaded straight from source.
-require('./kit.test.js')();
-require('./overdue.test.js')();
+await require('./kit.test.js')();
+await require('./overdue.test.js')();
 
 // Integration tests: the generated Code.gs, running in a fake Apps Script
 // runtime. These are the only way to check the wiring without a Google account,
@@ -35,14 +42,23 @@ H.suite('Build', function () {
   });
 });
 
-require('./availability.test.js')();
+await require('./availability.test.js')();
 
-require('./integration.test.js')();
-require('./events.test.js')();
-require('./demo.test.js')();
-require('./fixes.test.js')();
+await require('./integration.test.js')();
+await require('./events.test.js')();
+await require('./demo.test.js')();
+await require('./fixes.test.js')();
+await require('./screens.test.js')();
 
 // The label printer. Verified by reading the finished QR matrix back out.
-require('./qr.test.js')();
+await require('./qr.test.js')();
+
+await H.run();
 
 process.exit(H.summary() === 0 ? 0 : 1);
+}
+
+main().catch(function (e) {
+  console.error('\nThe test run itself failed:\n', e);
+  process.exit(1);
+});

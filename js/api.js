@@ -74,7 +74,8 @@ var Api = (function () {
     var error = (json && json.error) || {};
     throw new ApiError(error.code || 'SERVER_ERROR',
                        error.message || 'Something went wrong.',
-                       error.blockers ? { blockers: error.blockers } : null);
+                       { blockers: error.blockers, conflicts: error.conflicts,
+                         photo_required: error.photo_required });
   }
 
   /**
@@ -184,6 +185,7 @@ var Api = (function () {
     saveEvent: function (payload) { return post('saveEvent', payload); },
     deleteEvent: function (payload) { return post('deleteEvent', payload); },
     bulkCheckinEvent: function (payload) { return post('bulkCheckinEvent', payload); },
+    uploadPhoto: function (payload) { return post('uploadPhoto', payload); },
     saveSettings: function (payload) { return post('saveSettings', payload); }
   };
 })();

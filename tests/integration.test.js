@@ -408,7 +408,8 @@ module.exports = function () {
         checked_in_by: 'Nilesh',
         items: [
           { asset_id: 'TAB-014' },
-          { asset_id: 'TAB-016', condition_in: 'needs_repair', damage_notes: 'Skin split' }
+          { asset_id: 'TAB-016', condition_in: 'needs_repair', damage_notes: 'Skin split',
+            photo_url: 'https://drive.google.com/thumbnail?id=demo' }
         ]
       }));
       var bayyu = app.rows('Items').filter(function (i) { return i.asset_id === 'TAB-016'; })[0];
@@ -423,7 +424,8 @@ module.exports = function () {
       var app = kitOut(freshApp());
       app.post('checkin', {
         checked_in_by: 'Nilesh',
-        items: [{ asset_id: 'TAB-014' }, { asset_id: 'TAB-016', condition_in: 'needs_repair' }]
+        items: [{ asset_id: 'TAB-014' },
+                { asset_id: 'TAB-016', condition_in: 'needs_repair', photo_url: 'https://drive.google.com/thumbnail?id=demo' }]
       });
       var d = expectOk(app.post('checkout', {
         asset_ids: ['TAB-014'], event_id: 'EV-002', centre: 'Ruislip',

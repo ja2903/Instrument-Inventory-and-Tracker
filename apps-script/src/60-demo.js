@@ -22,6 +22,20 @@
  *    always looks alive rather than like a museum piece.
  */
 
+/**
+ * Stand-in for a real photo in the trial data. Deliberately a data URL rather
+ * than a Drive link: it renders offline, needs no permissions, and cannot be
+ * mistaken for a real record of damage.
+ */
+var DEMO_PHOTO_URL =
+  'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320">' +
+    '<rect width="480" height="320" fill="#f5f0e8"/>' +
+    '<text x="240" y="150" text-anchor="middle" font-family="sans-serif" ' +
+    'font-size="20" fill="#8a4111">Example damage photo</text>' +
+    '<text x="240" y="180" text-anchor="middle" font-family="sans-serif" ' +
+    'font-size="14" fill="#a8a29e">trial data only</text></svg>');
+
 /** Today plus (or minus) n days, as 'YYYY-MM-DD'. */
 function demoDay(offset) {
   return Utilities.formatDate(
@@ -289,9 +303,12 @@ function seedDemoHistory() {
 
   /* --- 3. An older loan that came back damaged, hence HAR-007 in maintenance --- */
   giveOut(['HAR-007', 'MIC-007'], 'EV-011', 'Neasden', -20, 'Priya');
+  // A damaged return needs a photo, so the trial data carries one too —
+  // otherwise the seeder would be exercising a path real users cannot take.
   takeBack([
     { asset_id: 'HAR-007', condition_in: 'needs_repair',
-      damage_notes: 'Bellows leaking after the sabha — sent to the repairer' },
+      damage_notes: 'Bellows leaking after the sabha — sent to the repairer',
+      photo_url: DEMO_PHOTO_URL },
     { asset_id: 'MIC-007', condition_in: 'fair' }
   ], 'Priya');
 

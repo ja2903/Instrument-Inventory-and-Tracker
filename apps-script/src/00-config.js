@@ -5,12 +5,26 @@
  * Everything in this file is data. No SpreadsheetApp calls, no logic.
  */
 
-var APP_VERSION = '1.4.1';
+var APP_VERSION = '1.4.6';
 var TIMEZONE = 'Europe/London';
 
 /** Script Property keys. The access code lives here, NOT in the Sheet. */
 var PROP_ACCESS_CODE = 'ACCESS_CODE';
 var DEFAULT_ACCESS_CODE = 'mandir2026';
+
+/**
+ * Photos live in a Drive folder owned by the same account as the Sheet.
+ * Created on first use; the id is remembered here so it is never made twice.
+ */
+var PROP_PHOTO_FOLDER = 'PHOTO_FOLDER_ID';
+var PHOTO_FOLDER_NAME = 'Instrument Tracker Photos';
+
+/**
+ * Photos arrive already downscaled by the browser. This is a backstop against
+ * a phone that ignores that, not the primary limit — Apps Script POST bodies
+ * top out well below this anyway.
+ */
+var MAX_PHOTO_BYTES = 4 * 1024 * 1024;
 
 /**
  * Tab names and their header rows, in order.
@@ -46,11 +60,15 @@ var TABS = {
     'expected_return_date', 'allocated_by', 'allocated_at', 'notes', 'status'
   ],
 
+  // photo_out_url / photo_in_url hold Drive links to pictures taken as the
+  // instrument left and came back. A photo is required when something is
+  // returned damaged — "the skin was already split when we got it" is the
+  // argument this exists to settle.
   Movements: [
     'movement_id', 'asset_id', 'allocation_id', 'event_id', 'sub_event_id',
-    'centre', 'checked_out_at', 'checked_out_by', 'condition_out',
+    'centre', 'checked_out_at', 'checked_out_by', 'condition_out', 'photo_out_url',
     'expected_return_date', 'checked_in_at', 'checked_in_by', 'condition_in',
-    'damage_notes', 'via_parent_asset_id', 'outcome'
+    'photo_in_url', 'damage_notes', 'via_parent_asset_id', 'outcome'
   ]
 };
 

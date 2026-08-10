@@ -33,7 +33,7 @@
     }
   };
 </script>
-<link rel="stylesheet" href="css/app.css?v=1.4.1">
+<link rel="stylesheet" href="css/app.css?v=1.4.6">
 </head>
 
 <body class="min-h-full bg-sand-50 font-sans text-stone-800 antialiased">
@@ -153,7 +153,7 @@
   register themselves on, so it has to come before them. App.start() runs on
   DOMContentLoaded, which is after every file here has been parsed.
 -->
-<script src="config.js?v=1.4.1"></script>
+<script src="config.js?v=1.4.6"></script>
 
 <!--
   The SAME rules the Apps Script backend runs — generated from
@@ -162,14 +162,14 @@
   instantly as you change a date picker, with no round trip. The server still
   re-checks everything on save; this is for the live UI only.
 -->
-<script src="js/rules.js?v=1.4.1"></script>
+<script src="js/rules.js?v=1.4.6"></script>
 
-<script src="js/qr.js?v=1.4.1"></script>
-<script src="js/ui.js?v=1.4.1"></script>
-<script src="js/api.js?v=1.4.1"></script>
-<script src="js/app.js?v=1.4.1"></script>
-<script src="js/inventory.js?v=1.4.1"></script>
-<script src="js/operations.js?v=1.4.1"></script>
+<script src="js/qr.js?v=1.4.6"></script>
+<script src="js/ui.js?v=1.4.6"></script>
+<script src="js/api.js?v=1.4.6"></script>
+<script src="js/app.js?v=1.4.6"></script>
+<script src="js/inventory.js?v=1.4.6"></script>
+<script src="js/operations.js?v=1.4.6"></script>
 
 <!--
   Last line of defence against a blank screen.
@@ -253,13 +253,29 @@
       '</div>';
   }
 
-  // Give the app a moment to start, then check it actually did.
+  /*
+   * When to complain — and, far more importantly, when NOT to.
+   *
+   * An earlier version of this guard also fired when neither panel was
+   * visible after a moment. That was wrong and actively harmful: on a cold
+   * Apps Script start the app legitimately waits several seconds for data,
+   * and the guard wiped the page out from under a perfectly healthy app.
+   * A watchdog that kills the thing it is watching is worse than no watchdog.
+   *
+   * So it now only reports what it can prove:
+   *   - a file that genuinely did not load (a missing global cannot fix
+   *     itself, so this is safe to report immediately), or
+   *   - App.start() never running at all, which is a synchronous flag and
+   *     therefore says nothing about how slow the network is.
+   *
+   * Waiting for data is not a failure, and is never reported as one.
+   */
   window.addEventListener('load', function () {
     setTimeout(function () {
       var missing = missingFiles();
-      var started = document.querySelector('#shell:not(.hidden), #unlock:not(.hidden)');
-      if (missing.length || !started) showFailure(missing);
-    }, 400);
+      if (missing.length) { showFailure(missing); return; }
+      if (!window.__instrumentTrackerStarted) showFailure([]);
+    }, 1500);
   });
 })();
 </script>

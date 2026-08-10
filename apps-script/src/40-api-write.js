@@ -50,6 +50,7 @@ function assertPlan(plan) {
     var e = new ApiError(plan.error.code, plan.error.message);
     if (plan.blockers) e.blockers = plan.blockers;
     if (plan.conflicts) e.conflicts = plan.conflicts;
+    if (plan.photo_required) e.photo_required = plan.photo_required;
     throw e;
   }
   return plan;
@@ -120,10 +121,12 @@ function actionCheckout(p) {
       checked_out_at: now,
       checked_out_by: by,
       condition_out: p.condition_out || item.current_condition || 'good',
+      photo_out_url: (p.photos && p.photos[line.asset_id]) || p.photo_url || '',
       expected_return_date: due,
       checked_in_at: '',
       checked_in_by: '',
       condition_in: '',
+      photo_in_url: '',
       damage_notes: '',
       via_parent_asset_id: line.via_parent_asset_id || '',
       outcome: ''
@@ -162,6 +165,7 @@ function actionCheckin(p) {
       checked_in_at: now,
       checked_in_by: by,
       condition_in: line.condition_in,
+      photo_in_url: line.photo_url || '',
       damage_notes: line.damage_notes,
       outcome: line.outcome
     });
@@ -362,6 +366,80 @@ function actionCancelAllocation(p) {
 
   flushAll();
   return { allocation_ids: cancelled };
+}
+
+/* ================================================================
+ * PHOTOS
+ * ================================================================
+ *
+ * Stored in Drive rather than in the Sheet. A Sheet cell cannot hold an
+ * image usefully, and base64 in a cell would bloat every read of the whole
+ * tab. The folder lives in the same Google account that owns the Sheet, so
+ * there is still nothing extra to pay for and nothing to expire.
+ */
+
+/** The photos folder, made once and remembered. */
+function photoFolder() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty(PROP_PHOTO_FOLDER);
+
+  if (id) {
+    try { return DriveApp.getFolderById(id); } catch (gone) { /* recreate below */ }
+  }
+
+  // Reuse a folder of the right name if one already exists — re-running setup
+  // should not litter Drive with duplicates.
+  var existing = DriveApp.getFoldersByName(PHOTO_FOLDER_NAME);
+  var folder = existing.hasNext() ? existing.next() : DriveApp.createFolder(PHOTO_FOLDER_NAME);
+  props.setProperty(PROP_PHOTO_FOLDER, folder.getId());
+  return folder;
+}
+
+/**
+ * Saves one photo and returns a link that renders in an <img>.
+ *
+ * `data_url` is what a browser canvas produces: "data:image/jpeg;base64,...".
+ */
+function actionUploadPhoto(p) {
+  var dataUrl = String(p.data_url || '');
+  var match = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/.exec(dataUrl);
+  if (!match) {
+    fail('BAD_REQUEST', 'That did not look like a photo. Try taking it again.');
+  }
+
+  var mimeType = match[1];
+  var base64 = match[2];
+  // 4 base64 characters carry 3 bytes.
+  if (base64.length * 3 / 4 > MAX_PHOTO_BYTES) {
+    fail('BAD_REQUEST', 'That photo is too large. Take it again, or use a lower camera setting.');
+  }
+
+  var assetId = String(p.asset_id || 'unknown').trim();
+  var kind = p.kind === 'out' ? 'out' : 'in';
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd-HHmmss');
+  var extension = mimeType === 'image/png' ? 'png' : (mimeType === 'image/webp' ? 'webp' : 'jpg');
+  var name = assetId + '-' + kind + '-' + stamp + '.' + extension;
+
+  var blob = Utilities.newBlob(Utilities.base64Decode(base64), mimeType, name);
+  var file = photoFolder().createFile(blob);
+
+  // Anyone with the link can view. The link is only ever shown inside the app,
+  // which is already behind the access code, and without this the photo will
+  // not load for a volunteer who is not signed in to the mandir's Google
+  // account — which is nearly all of them.
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (sharingRefused) {
+    // Some Workspace domains forbid link sharing. The file is still saved and
+    // still reachable by the account that owns it, so this is not fatal.
+    console.warn('Could not set link sharing on ' + name + ': ' + sharingRefused);
+  }
+
+  return {
+    photo_url: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w1200',
+    file_id: file.getId(),
+    name: name
+  };
 }
 
 /* ================================================================

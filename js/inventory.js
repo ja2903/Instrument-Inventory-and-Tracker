@@ -163,8 +163,76 @@
       return;
     }
 
-    host.innerHTML = groups.map(function (g) {
-      if (!g.parent.is_kit || !g.children.length) return UI.card(itemRow(g.parent), 'p-2');
+    /*
+     * Grouped by instrument type, not one flat list.
+     *
+     * Seventy-three rows in a single column is a scroll, not a list — you
+     * cannot see at a glance how many harmoniums exist, which is the question
+     * people actually arrive with. Categories collapse, and each header
+     * carries its own available/out counts.
+     */
+    var byType = {};
+    var typeOrder = [];
+    groups.forEach(function (g) {
+      var type = g.parent.instrument_type || 'Other';
+      if (!byType[type]) { byType[type] = []; typeOrder.push(type); }
+      byType[type].push(g);
+    });
+
+    // Settings order, so it matches every dropdown in the app.
+    var settingsOrder = App.activeTypes().map(function (t) { return t.name; });
+    typeOrder.sort(function (a, b) {
+      var ia = settingsOrder.indexOf(a), ib = settingsOrder.indexOf(b);
+      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    });
+
+    // A search or a filter has already narrowed things down, so opening every
+    // category is helpful then and overwhelming otherwise.
+    var openByDefault = !!filters.q || hasActiveFilters() || typeOrder.length === 1;
+
+    host.innerHTML = typeOrder.map(function (type) {
+      var inType = byType[type];
+      var pieces = inType.reduce(function (n, g) { return n + 1 + g.children.length; }, 0);
+      var free = inType.filter(function (g) {
+        return g.parent.status === 'available';
+      }).length;
+      var out = inType.filter(function (g) {
+        return g.parent.status === 'checked_out';
+      }).length;
+      var attention = inType.filter(function (g) {
+        return g.parent.status === 'maintenance' || g.parent.status === 'lost';
+      }).length;
+
+      return '<details class="overflow-hidden rounded-2xl bg-white shadow-sm ' +
+        'ring-1 ring-stone-900/5"' + (openByDefault ? ' open' : '') + '>' +
+        '<summary class="flex cursor-pointer items-center gap-3 px-4 py-3.5">' +
+          '<span class="min-w-0 flex-1">' +
+            '<span class="block text-base font-semibold text-stone-900">' +
+              UI.esc(type) + '</span>' +
+            '<span class="block text-xs text-stone-500">' +
+              UI.plural(inType.length, 'item') +
+              (pieces !== inType.length ? ' · ' + pieces + ' pieces in total' : '') +
+              (out ? ' · ' + out + ' out' : '') +
+              (attention ? ' · ' + attention + ' to fix' : '') + '</span>' +
+          '</span>' +
+          '<span class="shrink-0 rounded-full px-2.5 py-1 text-sm font-semibold ' +
+            (free ? 'bg-emerald-50 text-emerald-800' : 'bg-stone-100 text-stone-500') + '">' +
+            free + ' free</span>' +
+          '<svg class="chevron h-5 w-5 shrink-0 text-stone-400 transition-transform" ' +
+            'fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" ' +
+            'aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" ' +
+            'd="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>' +
+        '</summary>' +
+        '<div class="border-t border-stone-100 p-2">' +
+          inType.map(itemGroupHtml).join('') +
+        '</div>' +
+      '</details>';
+    }).join('');
+  }
+
+  /** One instrument, or one set with its pieces folded inside. */
+  function itemGroupHtml(g) {
+      if (!g.parent.is_kit || !g.children.length) return itemRow(g.parent);
 
       // A set stays CLOSED until you ask for it. Showing six pieces of a tabla
       // set inline pushes everything else off the screen, and the pieces are
@@ -178,8 +246,7 @@
       // otherwise the result would look like an empty row.
       var forcedOpen = g.matchingChildren.length > 0 && !matchesFilters(g.parent);
 
-      return '<details class="overflow-hidden rounded-2xl bg-white p-2 shadow-sm ' +
-        'ring-1 ring-stone-900/5"' + (forcedOpen ? ' open' : '') + '>' +
+      return '<details class="overflow-hidden rounded-xl"' + (forcedOpen ? ' open' : '') + '>' +
         '<summary class="cursor-pointer rounded-xl">' +
           '<span class="flex items-center gap-1">' +
             '<span class="min-w-0 flex-1">' + itemRow(g.parent) + '</span>' +
@@ -198,7 +265,6 @@
           g.children.map(function (c) { return itemRow(c, { nested: true }); }).join('') +
         '</div>' +
       '</details>';
-    }).join('');
   }
 
   App.screens.inventory = function () {
@@ -850,12 +916,20 @@
    * ================================================================ */
 
   var labelSelection = {};   // asset_id -> true
+  var labelSheet = 'avery';  // 'avery' (L7160/J8160) or 'plain' (cut them out)
+
+  /**
+   * Which items get the big luggage-style tag: the set itself, and the bag or
+   * case it lives in. Both are tied on rather than stuck to an instrument.
+   */
+  function isBagLabel(item) {
+    return item.is_kit || /\bbag\b|\bcase\b/i.test(item.name);
+  }
 
   /** One printable label. Kit bags get the bigger 40mm tag. */
   function labelHtml(item) {
     var parent = item.parent_asset_id ? App.itemById(item.parent_asset_id) : null;
-    var isBag = item.is_kit ||
-                /\bbag\b|\bcase\b/i.test(item.name);   // the thing the set lives in
+    var isBag = isBagLabel(item);
 
     var svg;
     try {
@@ -886,6 +960,14 @@
     var selectedIds = Object.keys(labelSelection).filter(function (id) { return labelSelection[id]; });
     var selected = selectedIds.map(App.itemById).filter(Boolean);
 
+    // Bag tags need a 48mm QR box, which is taller than an Avery label — so
+    // they are printed separately rather than squeezed or straddling two.
+    var bagLabels = selected.filter(isBagLabel);
+    var normalLabels = selected.filter(function (i) { return !isBagLabel(i); });
+
+    // 21 address labels per sheet; 4 bag tags per plain sheet.
+    var sheets = Math.ceil(normalLabels.length / 21) + Math.ceil(bagLabels.length / 4);
+
     var groups = App.topLevelItems().map(function (parent) {
       return { parent: parent, children: App.childrenOf(parent.asset_id) };
     });
@@ -894,11 +976,45 @@
         'Choose items, then print. Each label carries the QR code, the asset ID and the ' +
         'mandir name.') +
 
+      // Which paper is going in the printer decides the whole geometry, so it
+      // is asked before anything else.
+      '<div class="no-print mb-4 rounded-2xl bg-white p-3 shadow-sm ring-1 ring-stone-900/5">' +
+        '<p class="mb-2 text-sm font-medium text-stone-700">What are you printing on?</p>' +
+        '<div class="grid gap-2 sm:grid-cols-2">' +
+          [['avery', 'Avery L7160 label sheets',
+            '63.5 x 38.1mm, 21 per sheet. No cutting — peel and stick.'],
+           ['plain', 'Plain A4 paper',
+            'Dashed guides to cut along. Nothing to buy.']
+          ].map(function (o) {
+            var active = labelSheet === o[0];
+            return '<button type="button" data-action="labels-sheet" data-value="' + o[0] + '" ' +
+              'class="rounded-xl p-3 text-left transition ' +
+              (active ? 'bg-saffron-50 ring-2 ring-saffron-500'
+                      : 'bg-white ring-1 ring-stone-200 hover:bg-stone-50') + '">' +
+              '<span class="block text-sm font-semibold ' +
+                (active ? 'text-saffron-900' : 'text-stone-900') + '">' + o[1] + '</span>' +
+              '<span class="block text-xs text-stone-500">' + o[2] + '</span>' +
+            '</button>';
+          }).join('') +
+        '</div>' +
+        (labelSheet === 'avery'
+          ? '<p class="mt-2 rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600">' +
+            'In the print dialog set <strong>Margins: None</strong> and ' +
+            '<strong>Scale: 100%</strong>. Avery sheets carry their own margins — ' +
+            'adding the printer\'s on top shifts every label down a row.</p>'
+          : '<p class="mt-2 rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600">' +
+            'In the print dialog set <strong>Scale: 100%</strong> (not "fit to page") ' +
+            'and turn headers and footers off.</p>') +
+      '</div>' +
+
       '<div class="no-print mb-4 flex flex-wrap items-center gap-2">' +
         UI.button('Select all', { action: 'labels-all', variant: 'secondary' }) +
         UI.button('Clear', { action: 'labels-none', variant: 'secondary' }) +
         '<span class="ml-auto text-sm text-stone-500">' +
-          UI.plural(selected.length, 'label') + ' selected</span>' +
+          UI.plural(selected.length, 'label') + ' selected' +
+          (selected.length ? ' · ' + UI.plural(sheets, 'sheet') : '') +
+          (bagLabels.length
+            ? ' (incl. ' + UI.plural(bagLabels.length, 'bag tag') + ')' : '') + '</span>' +
         UI.button('Print', { action: 'labels-print', disabled: !selected.length }) +
       '</div>' +
 
@@ -942,11 +1058,19 @@
 
       (selected.length
         ? '<h2 class="no-print mb-3 text-base font-semibold text-stone-900">Preview</h2>' +
-          '<div class="label-sheet">' + selected.map(labelHtml).join('') + '</div>' +
+          '<div class="label-sheet' + (labelSheet === 'plain' ? ' sheet-plain' : '') + '">' +
+            normalLabels.map(labelHtml).join('') + '</div>' +
+
+          (bagLabels.length
+            ? '<h3 class="no-print mb-2 mt-6 text-sm font-semibold text-stone-700">' +
+                'Kit bag tags — printed on a separate plain sheet</h3>' +
+              '<div class="label-sheet sheet-plain sheet-bags">' +
+                bagLabels.map(labelHtml).join('') + '</div>'
+            : '') +
           '<p class="no-print mt-6 rounded-xl bg-saffron-50 p-4 text-sm text-saffron-900">' +
-            '<strong>Before printing:</strong> set your printer to actual size (not "fit to page"), ' +
-            'and check the QR squares measure at least 25mm across on the paper. ' +
-            'Anything smaller stops scanning reliably.</p>'
+            '<strong>Check the first sheet with a ruler.</strong> The black QR square should ' +
+            'measure about <strong>25mm</strong> across (40mm on a kit-bag tag). If it comes ' +
+            'out smaller, the printer is scaling the page down — set Scale to 100%.</p>'
         : UI.emptyState('🏷', 'No labels selected',
             'Tick the instruments you want labels for.'));
   };
@@ -990,6 +1114,11 @@
 
   App.actions['labels-none'] = function () {
     labelSelection = {};
+    App.render();
+  };
+
+  App.actions['labels-sheet'] = function (button) {
+    labelSheet = button.dataset.value;
     App.render();
   };
 

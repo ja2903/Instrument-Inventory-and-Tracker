@@ -246,7 +246,8 @@ module.exports = function () {
       var r = expectOk(Rules.planCheckin(s, {
         items: [
           { asset_id: 'TAB-014' },
-          { asset_id: 'TAB-016', condition_in: 'needs_repair', damage_notes: 'Skin split' }
+          { asset_id: 'TAB-016', condition_in: 'needs_repair', damage_notes: 'Skin split',
+            photo_url: 'https://drive.google.com/thumbnail?id=demo' }
         ]
       }));
       var bayyu = r.lines.filter(function (l) { return l.asset_id === 'TAB-016'; })[0];
@@ -277,7 +278,8 @@ module.exports = function () {
     test('the parent itself can be flagged damaged while its children are fine', function () {
       var s = F.checkOutWholeKit(F.state());
       var r = expectOk(Rules.planCheckin(s, {
-        items: [{ asset_id: 'TAB-014', condition_in: 'needs_repair', damage_notes: 'Bag zip torn' }]
+        items: [{ asset_id: 'TAB-014', condition_in: 'needs_repair',
+                   damage_notes: 'Bag zip torn', photo_url: 'https://drive.google.com/thumbnail?id=demo' }]
       }));
       var parent = r.lines.filter(function (l) { return l.asset_id === 'TAB-014'; })[0];
       eq(parent.new_status, 'maintenance');

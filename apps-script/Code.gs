@@ -21,12 +21,26 @@
  * Everything in this file is data. No SpreadsheetApp calls, no logic.
  */
 
-var APP_VERSION = '1.4.1';
+var APP_VERSION = '1.4.6';
 var TIMEZONE = 'Europe/London';
 
 /** Script Property keys. The access code lives here, NOT in the Sheet. */
 var PROP_ACCESS_CODE = 'ACCESS_CODE';
 var DEFAULT_ACCESS_CODE = 'mandir2026';
+
+/**
+ * Photos live in a Drive folder owned by the same account as the Sheet.
+ * Created on first use; the id is remembered here so it is never made twice.
+ */
+var PROP_PHOTO_FOLDER = 'PHOTO_FOLDER_ID';
+var PHOTO_FOLDER_NAME = 'Instrument Tracker Photos';
+
+/**
+ * Photos arrive already downscaled by the browser. This is a backstop against
+ * a phone that ignores that, not the primary limit — Apps Script POST bodies
+ * top out well below this anyway.
+ */
+var MAX_PHOTO_BYTES = 4 * 1024 * 1024;
 
 /**
  * Tab names and their header rows, in order.
@@ -62,11 +76,15 @@ var TABS = {
     'expected_return_date', 'allocated_by', 'allocated_at', 'notes', 'status'
   ],
 
+  // photo_out_url / photo_in_url hold Drive links to pictures taken as the
+  // instrument left and came back. A photo is required when something is
+  // returned damaged — "the skin was already split when we got it" is the
+  // argument this exists to settle.
   Movements: [
     'movement_id', 'asset_id', 'allocation_id', 'event_id', 'sub_event_id',
-    'centre', 'checked_out_at', 'checked_out_by', 'condition_out',
+    'centre', 'checked_out_at', 'checked_out_by', 'condition_out', 'photo_out_url',
     'expected_return_date', 'checked_in_at', 'checked_in_by', 'condition_in',
-    'damage_notes', 'via_parent_asset_id', 'outcome'
+    'photo_in_url', 'damage_notes', 'via_parent_asset_id', 'outcome'
   ]
 };
 
@@ -602,6 +620,7 @@ var Rules = (function () {
     var lines = [];
     var seen = {};
     var warnings = [];
+    var photoRequired = [];
 
     function addLine(assetId, movement, spec) {
       if (seen[assetId]) return;
@@ -626,6 +645,19 @@ var Rules = (function () {
         damage = s.damage_notes || '';
       }
 
+      /*
+       * A damaged return has to carry a photo.
+       *
+       * Six months later, "the skin was already split when we collected it"
+       * is unanswerable without one. A photo settles it, and the moment to
+       * take it is while the instrument is still on the table.
+       *
+       * Not required for a missing item — there is nothing to photograph.
+       */
+      if (outcome === 'damaged' && !String(s.photo_url || '').trim()) {
+        photoRequired.push({ asset_id: assetId, name: item ? item.name : assetId });
+      }
+
       var line = {
         asset_id: assetId,
         movement_id: movement.movement_id,
@@ -634,6 +666,7 @@ var Rules = (function () {
         outcome: outcome,
         new_status: newStatus,
         new_condition: condition || (item ? item.current_condition : ''),
+        photo_url: String(s.photo_url || '').trim(),
         via_parent_asset_id: movement.via_parent_asset_id || ''
       };
       seen[assetId] = line;
@@ -681,6 +714,21 @@ var Rules = (function () {
     }
 
     if (!lines.length) return err('ITEM_NOT_OUT', 'Nothing in this list is currently checked out.');
+
+    if (photoRequired.length) {
+      var names = photoRequired.map(function (p) { return p.name; });
+      return {
+        ok: false,
+        error: {
+          code: 'PHOTO_REQUIRED',
+          message: (names.length === 1 ? names[0] + ' is' : names.join(', ') + ' are') +
+                   ' marked as damaged, so a photo of the damage is needed before this ' +
+                   'can be saved.'
+        },
+        photo_required: photoRequired
+      };
+    }
+
     return { ok: true, lines: lines, warnings: warnings };
   }
 
@@ -1632,6 +1680,7 @@ function assertPlan(plan) {
     var e = new ApiError(plan.error.code, plan.error.message);
     if (plan.blockers) e.blockers = plan.blockers;
     if (plan.conflicts) e.conflicts = plan.conflicts;
+    if (plan.photo_required) e.photo_required = plan.photo_required;
     throw e;
   }
   return plan;
@@ -1702,10 +1751,12 @@ function actionCheckout(p) {
       checked_out_at: now,
       checked_out_by: by,
       condition_out: p.condition_out || item.current_condition || 'good',
+      photo_out_url: (p.photos && p.photos[line.asset_id]) || p.photo_url || '',
       expected_return_date: due,
       checked_in_at: '',
       checked_in_by: '',
       condition_in: '',
+      photo_in_url: '',
       damage_notes: '',
       via_parent_asset_id: line.via_parent_asset_id || '',
       outcome: ''
@@ -1744,6 +1795,7 @@ function actionCheckin(p) {
       checked_in_at: now,
       checked_in_by: by,
       condition_in: line.condition_in,
+      photo_in_url: line.photo_url || '',
       damage_notes: line.damage_notes,
       outcome: line.outcome
     });
@@ -1944,6 +1996,80 @@ function actionCancelAllocation(p) {
 
   flushAll();
   return { allocation_ids: cancelled };
+}
+
+/* ================================================================
+ * PHOTOS
+ * ================================================================
+ *
+ * Stored in Drive rather than in the Sheet. A Sheet cell cannot hold an
+ * image usefully, and base64 in a cell would bloat every read of the whole
+ * tab. The folder lives in the same Google account that owns the Sheet, so
+ * there is still nothing extra to pay for and nothing to expire.
+ */
+
+/** The photos folder, made once and remembered. */
+function photoFolder() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty(PROP_PHOTO_FOLDER);
+
+  if (id) {
+    try { return DriveApp.getFolderById(id); } catch (gone) { /* recreate below */ }
+  }
+
+  // Reuse a folder of the right name if one already exists — re-running setup
+  // should not litter Drive with duplicates.
+  var existing = DriveApp.getFoldersByName(PHOTO_FOLDER_NAME);
+  var folder = existing.hasNext() ? existing.next() : DriveApp.createFolder(PHOTO_FOLDER_NAME);
+  props.setProperty(PROP_PHOTO_FOLDER, folder.getId());
+  return folder;
+}
+
+/**
+ * Saves one photo and returns a link that renders in an <img>.
+ *
+ * `data_url` is what a browser canvas produces: "data:image/jpeg;base64,...".
+ */
+function actionUploadPhoto(p) {
+  var dataUrl = String(p.data_url || '');
+  var match = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/.exec(dataUrl);
+  if (!match) {
+    fail('BAD_REQUEST', 'That did not look like a photo. Try taking it again.');
+  }
+
+  var mimeType = match[1];
+  var base64 = match[2];
+  // 4 base64 characters carry 3 bytes.
+  if (base64.length * 3 / 4 > MAX_PHOTO_BYTES) {
+    fail('BAD_REQUEST', 'That photo is too large. Take it again, or use a lower camera setting.');
+  }
+
+  var assetId = String(p.asset_id || 'unknown').trim();
+  var kind = p.kind === 'out' ? 'out' : 'in';
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd-HHmmss');
+  var extension = mimeType === 'image/png' ? 'png' : (mimeType === 'image/webp' ? 'webp' : 'jpg');
+  var name = assetId + '-' + kind + '-' + stamp + '.' + extension;
+
+  var blob = Utilities.newBlob(Utilities.base64Decode(base64), mimeType, name);
+  var file = photoFolder().createFile(blob);
+
+  // Anyone with the link can view. The link is only ever shown inside the app,
+  // which is already behind the access code, and without this the photo will
+  // not load for a volunteer who is not signed in to the mandir's Google
+  // account — which is nearly all of them.
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (sharingRefused) {
+    // Some Workspace domains forbid link sharing. The file is still saved and
+    // still reachable by the account that owns it, so this is not fatal.
+    console.warn('Could not set link sharing on ' + name + ': ' + sharingRefused);
+  }
+
+  return {
+    photo_url: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w1200',
+    file_id: file.getId(),
+    name: name
+  };
 }
 
 /* ================================================================
@@ -2489,6 +2615,7 @@ var WRITE_ACTIONS = {
   saveEvent: actionSaveEvent,
   deleteEvent: actionDeleteEvent,
   bulkCheckinEvent: actionBulkCheckinEvent,
+  uploadPhoto: actionUploadPhoto,
   saveSettings: actionSaveSettings
 };
 
@@ -2548,6 +2675,7 @@ function handleThrown(err) {
     var payload = { ok: false, error: { code: err.code, message: err.message } };
     if (err.blockers) payload.error.blockers = err.blockers;
     if (err.conflicts) payload.error.conflicts = err.conflicts;
+    if (err.photo_required) payload.error.photo_required = err.photo_required;
     return jsonOut(payload);
   }
   console.error('Unhandled error: ' + (err && err.stack ? err.stack : err));
@@ -2722,6 +2850,20 @@ function clearDemoMovements() {
  *    things are overdue by the same number of days, so the dashboard
  *    always looks alive rather than like a museum piece.
  */
+
+/**
+ * Stand-in for a real photo in the trial data. Deliberately a data URL rather
+ * than a Drive link: it renders offline, needs no permissions, and cannot be
+ * mistaken for a real record of damage.
+ */
+var DEMO_PHOTO_URL =
+  'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320">' +
+    '<rect width="480" height="320" fill="#f5f0e8"/>' +
+    '<text x="240" y="150" text-anchor="middle" font-family="sans-serif" ' +
+    'font-size="20" fill="#8a4111">Example damage photo</text>' +
+    '<text x="240" y="180" text-anchor="middle" font-family="sans-serif" ' +
+    'font-size="14" fill="#a8a29e">trial data only</text></svg>');
 
 /** Today plus (or minus) n days, as 'YYYY-MM-DD'. */
 function demoDay(offset) {
@@ -2990,9 +3132,12 @@ function seedDemoHistory() {
 
   /* --- 3. An older loan that came back damaged, hence HAR-007 in maintenance --- */
   giveOut(['HAR-007', 'MIC-007'], 'EV-011', 'Neasden', -20, 'Priya');
+  // A damaged return needs a photo, so the trial data carries one too —
+  // otherwise the seeder would be exercising a path real users cannot take.
   takeBack([
     { asset_id: 'HAR-007', condition_in: 'needs_repair',
-      damage_notes: 'Bellows leaking after the sabha — sent to the repairer' },
+      damage_notes: 'Bellows leaking after the sabha — sent to the repairer',
+      photo_url: DEMO_PHOTO_URL },
     { asset_id: 'MIC-007', condition_in: 'fair' }
   ], 'Priya');
 

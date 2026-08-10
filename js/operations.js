@@ -636,6 +636,10 @@
         }) +
       '</div>' +
 
+      // --- what is on the shelf right now, for the three types anyone asks
+      //     about. Three, not thirteen: a glance, not a report. ---
+      availabilityStrip() +
+
       // --- one quiet line instead of five tiles ---
       '<p class="mb-5 px-1 text-sm text-stone-500">' +
         '<a href="#/inventory" class="font-semibold text-stone-700 underline-offset-2 ' +
@@ -710,6 +714,46 @@
       (booked ? bookedAheadSection() : '');
   };
 
+  /**
+   * "3 tablas, 5 harmoniums, 2 keyboards free."
+   *
+   * Deliberately only these three. They are what centres actually ring up
+   * about, and a strip of thirteen numbers is a report rather than a glance.
+   * Sets count as one — nobody asks for half a tabla set.
+   */
+  var HEADLINE_TYPES = [
+    { type: 'Tabla', label: 'Tablas', icon: '🥁' },
+    { type: 'Harmonium', label: 'Harmoniums', icon: '🪗' },
+    { type: 'Keyboard', label: 'Keyboards', icon: '🎹' }
+  ];
+
+  function availabilityStrip() {
+    var cells = HEADLINE_TYPES.map(function (entry) {
+      var all = App.topLevelItems().filter(function (i) {
+        return i.instrument_type === entry.type;
+      });
+      var free = all.filter(function (i) { return i.status === 'available'; }).length;
+      if (!all.length) return '';
+
+      return '<a href="#/inventory" data-action="show-type" data-value="' + entry.type + '" ' +
+        'class="flex flex-1 flex-col items-center rounded-2xl bg-white px-2 py-3 shadow-sm ' +
+        'ring-1 ring-stone-900/5 transition hover:shadow-md">' +
+        '<span class="text-xl" aria-hidden="true">' + entry.icon + '</span>' +
+        '<span class="mt-1 text-2xl font-bold tracking-tight ' +
+          (free ? 'text-emerald-700' : 'text-stone-400') + '">' + free + '</span>' +
+        '<span class="text-xs font-medium text-stone-500">' + entry.label + ' free</span>' +
+        '<span class="text-[0.65rem] text-stone-400">of ' + all.length + '</span>' +
+      '</a>';
+    }).filter(Boolean).join('');
+
+    return cells ? '<div class="mb-4 flex gap-2">' + cells + '</div>' : '';
+  }
+
+  App.actions['show-type'] = function (button) {
+    App.setInventoryFilter({ type: button.dataset.value });
+    App.go('#/inventory');
+  };
+
   App.actions['show-maintenance'] = function () {
     App.setInventoryFilter({ status: 'maintenance' });
     App.go('#/inventory');
@@ -767,8 +811,10 @@
           '</p>' +
 
           '<div class="mt-2 flex flex-wrap gap-1.5">' +
-            '<a href="#/give" class="rounded-lg bg-saffron-50 px-2.5 py-1.5 text-xs ' +
-              'font-semibold text-saffron-800 hover:bg-saffron-100">Hand over</a>' +
+            '<button type="button" data-action="booking-hand-over" ' +
+              'data-value="' + UI.esc(ids) + '" ' +
+              'class="rounded-lg bg-saffron-50 px-2.5 py-1.5 text-xs ' +
+              'font-semibold text-saffron-800 hover:bg-saffron-100">Hand over</button>' +
             '<button type="button" data-action="booking-edit" data-value="' + UI.esc(ids) + '" ' +
               'class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-stone-600 ' +
               'hover:bg-stone-100">Change dates</button>' +
@@ -790,6 +836,44 @@
       return wanted[a.allocation_id];
     });
   }
+
+  /**
+   * Hand over: drop the booking straight into the Give out flow.
+   *
+   * Everything the booking already knows — instruments, event, dates, who is
+   * responsible — is carried across, so collecting a booking is a confirm
+   * rather than a re-entry. Re-typing it invites a typo that silently detaches
+   * the collection from the booking it settles.
+   */
+  App.actions['booking-hand-over'] = function (button) {
+    var rows = bookingRows(button.dataset.value);
+    if (!rows.length) return;
+    var first = rows[0];
+
+    var g = resetGive();
+    g.when = 'now';                       // they are here, collecting
+    g.event_id = first.event_id || '';
+    g.centre = first.centre || '';
+    g.to = first.expected_return_date || g.to;
+    g.name = first.allocated_by || g.name;
+    g.notes = first.notes || '';
+    g.fromBooking = rows.map(function (r) { return r.allocation_id; });
+
+    // Only the top-level items are ticked: pieces of a set come with the set,
+    // and ticking both would double-count on the confirm screen.
+    rows.forEach(function (r) {
+      var item = App.itemById(r.asset_id);
+      if (item && !item.parent_asset_id) g.chosen[r.asset_id] = true;
+    });
+    // A booking made up only of pieces still has to select something.
+    if (!Object.keys(g.chosen).length) {
+      rows.forEach(function (r) { g.chosen[r.asset_id] = true; });
+    }
+
+    g.step = 3;                           // straight to the summary
+    App.go('#/give');
+    UI.toast('Booking loaded — check and confirm', 'success');
+  };
 
   App.actions['booking-edit'] = async function (button) {
     var rows = bookingRows(button.dataset.value);
@@ -915,7 +999,9 @@
       notes: '',
       chosen: {},
       q: '',
-      showUnavailable: false
+      showUnavailable: false,
+      photos: {},          // asset_id -> Drive link, all optional on the way out
+      fromBooking: null    // allocation ids this give-out settles, if any
     };
     return give;
   }
@@ -1255,34 +1341,92 @@
       '</div>';
     }
 
-    return '<label class="flex cursor-pointer items-start gap-3 border-b border-stone-100 ' +
-      'px-4 py-3 transition last:border-0 ' +
-      (picked ? 'bg-saffron-50' : 'hover:bg-stone-50') + '">' +
+    var g = giveState();
+    var piecesChosen = kids.filter(function (k) { return g.chosen[k.asset_id]; }).length;
 
-      '<input type="checkbox" data-action="give-toggle" ' +
-        'data-value="' + UI.esc(item.asset_id) + '" ' + (picked ? 'checked ' : '') +
-        'class="mt-0.5 h-6 w-6 shrink-0 rounded-md border-stone-300 text-saffron-600 ' +
-        'focus:ring-saffron-500">' +
+    return '<div class="border-b border-stone-100 last:border-0">' +
+      '<label class="flex cursor-pointer items-start gap-3 px-4 py-3 transition ' +
+        (picked ? 'bg-saffron-50' : 'hover:bg-stone-50') + '">' +
 
-      '<span class="min-w-0 flex-1">' +
-        '<span class="block text-sm font-medium ' +
-          (picked ? 'text-saffron-900' : 'text-stone-900') + '">' +
-          UI.esc(item.name) + '</span>' +
-        '<span class="block font-mono text-xs text-stone-400">' + UI.esc(item.asset_id) +
-          (kids.length ? ' · whole set of ' + (kids.length + 1) : '') + '</span>' +
+        '<input type="checkbox" data-action="give-toggle" ' +
+          'data-value="' + UI.esc(item.asset_id) + '" ' + (picked ? 'checked ' : '') +
+          'class="mt-0.5 h-6 w-6 shrink-0 rounded-md border-stone-300 text-saffron-600 ' +
+          'focus:ring-saffron-500">' +
 
-        (row.busyChildren.length
-          ? '<span class="mt-1 block rounded-lg bg-amber-50 px-2 py-1 text-xs text-amber-900">' +
-            'Without ' +
-            UI.esc(row.busyChildren.map(function (b) { return b.item.name; }).join(', ')) +
-            '</span>'
+        '<span class="min-w-0 flex-1">' +
+          '<span class="block text-sm font-medium ' +
+            (picked ? 'text-saffron-900' : 'text-stone-900') + '">' +
+            UI.esc(item.name) + '</span>' +
+          '<span class="block font-mono text-xs text-stone-400">' + UI.esc(item.asset_id) +
+            (kids.length ? ' · whole set of ' + (kids.length + 1) : '') + '</span>' +
+
+          (row.busyChildren.length
+            ? '<span class="mt-1 block rounded-lg bg-amber-50 px-2 py-1 text-xs text-amber-900">' +
+              'Without ' +
+              UI.esc(row.busyChildren.map(function (b) { return b.item.name; }).join(', ')) +
+              '</span>'
+            : '') +
+        '</span>' +
+
+        (picked
+          ? '<span class="shrink-0 self-center text-xs font-semibold text-saffron-700">✓</span>'
           : '') +
-      '</span>' +
+      '</label>' +
 
-      (picked
-        ? '<span class="shrink-0 self-center text-xs font-semibold text-saffron-700">✓</span>'
+      /*
+       * Breaking a set open.
+       *
+       * Sometimes only the dayyu is wanted. Ticking the set sends everything;
+       * this lets single pieces go instead, leaving the rest on the shelf.
+       * Hidden behind a summary because taking the whole set is the normal
+       * case and should stay the one-tap one.
+       */
+      (kids.length && !picked
+        ? '<details class="bg-stone-50/60"' + (piecesChosen ? ' open' : '') + '>' +
+            '<summary class="flex cursor-pointer items-center gap-2 py-2 pl-12 pr-4 ' +
+              'text-xs font-medium text-stone-500 hover:text-stone-800">' +
+              '<span>' +
+                (piecesChosen
+                  ? piecesChosen + ' of ' + kids.length + ' pieces chosen'
+                  : 'Or take single pieces') + '</span>' +
+              '<svg class="chevron h-3.5 w-3.5 transition-transform" fill="none" ' +
+                'viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" ' +
+                'aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" ' +
+                'd="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>' +
+            '</summary>' +
+            '<div>' + kids.map(function (kid) {
+              var free = App.isFreeBetween(kid.asset_id, g.from, g.to);
+              var kidPicked = !!g.chosen[kid.asset_id];
+
+              if (!free) {
+                var why = App.conflictsFor(kid.asset_id, g.from, g.to)[0];
+                return '<div class="flex items-center gap-3 py-2 pl-14 pr-4 opacity-60">' +
+                  '<span class="text-xs text-stone-400" aria-hidden="true">✕</span>' +
+                  '<span class="min-w-0 flex-1 text-xs text-stone-500 line-through">' +
+                    UI.esc(kid.name) + '</span>' +
+                  '<span class="shrink-0 text-xs text-red-700">' +
+                    UI.esc(why ? why.reason : 'Not free') + '</span>' +
+                '</div>';
+              }
+
+              return '<label class="flex cursor-pointer items-center gap-3 py-2 pl-14 pr-4 ' +
+                (kidPicked ? 'bg-saffron-50' : 'hover:bg-stone-100') + '">' +
+                '<input type="checkbox" data-action="give-toggle" ' +
+                  'data-value="' + UI.esc(kid.asset_id) + '" ' + (kidPicked ? 'checked ' : '') +
+                  'class="h-5 w-5 shrink-0 rounded-md border-stone-300 text-saffron-600 ' +
+                  'focus:ring-saffron-500">' +
+                '<span class="min-w-0 flex-1">' +
+                  '<span class="block truncate text-xs font-medium ' +
+                    (kidPicked ? 'text-saffron-900' : 'text-stone-700') + '">' +
+                    UI.esc(kid.name) + '</span>' +
+                  '<span class="block font-mono text-[0.65rem] text-stone-400">' +
+                    UI.esc(kid.asset_id) + '</span>' +
+                '</span>' +
+              '</label>';
+            }).join('') + '</div>' +
+          '</details>'
         : '') +
-    '</label>';
+    '</div>';
   }
 
   function updateGiveCount() {
@@ -1434,6 +1578,41 @@
         lines +
       '</ul>' +
 
+      /*
+       * Photos on the way out are always optional. They are worth taking for
+       * anything valuable or already marked, because a picture of how an
+       * instrument left is the other half of the damaged-return argument —
+       * but insisting on one for every microphone would make handing over a
+       * PA rig unbearable.
+       */
+      '<details class="mt-4 overflow-hidden rounded-2xl bg-white shadow-sm ' +
+        'ring-1 ring-stone-900/5"' + (Object.keys(g.photos).length ? ' open' : '') + '>' +
+        '<summary class="flex cursor-pointer items-center gap-3 px-4 py-3.5">' +
+          '<span class="text-lg" aria-hidden="true">\ud83d\udcf7</span>' +
+          '<span class="min-w-0 flex-1">' +
+            '<span class="block text-sm font-semibold text-stone-900">' +
+              'Photos before they go (optional)</span>' +
+            '<span class="block text-xs text-stone-500">' +
+              (Object.keys(g.photos).length
+                ? UI.plural(Object.keys(g.photos).length, 'photo') + ' taken'
+                : 'Worth doing for anything valuable or already marked') + '</span>' +
+          '</span>' +
+          '<svg class="chevron h-5 w-5 shrink-0 text-stone-400 transition-transform" ' +
+            'fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" ' +
+            'aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" ' +
+            'd="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>' +
+        '</summary>' +
+        '<div id="give-photos" class="border-t border-stone-100 p-3">' +
+          chosen.map(function (item) {
+            return photoField(item, { photo_url: g.photos[item.asset_id] || '' }, {
+              kind: 'out',
+              required: false,
+              hint: 'How ' + item.name + ' looks right now.'
+            });
+          }).join('') +
+        '</div>' +
+      '</details>' +
+
       '<div class="mt-5 pb-8">' +
         UI.button(takingNow ? 'Hand them over' : 'Save the booking',
           { action: 'give-confirm', id: 'give-confirm', class: 'w-full' }) +
@@ -1453,7 +1632,14 @@
     '</div>';
   }
 
-  function mountGiveConfirm() { /* nothing to wire */ }
+  function mountGiveConfirm() {
+    var host = document.getElementById('give-photos');
+    if (!host) return;
+    wirePhotoFields(host, function (assetId, photoUrl) {
+      giveState().photos[assetId] = photoUrl;
+      App.render();
+    });
+  }
 
   App.actions['give-back-2'] = function () {
     giveState().step = 2;
@@ -1475,7 +1661,8 @@
           event_id: g.event_id,
           centre: g.centre,
           expected_return_date: g.to,
-          checked_out_by: g.name.trim()
+          checked_out_by: g.name.trim(),
+          photos: g.photos
         });
         if (!result) { restore(); return; }
       } else {
@@ -1987,6 +2174,15 @@
               'placeholder="' + (missing ? 'Where was it last seen?' : 'What is wrong with it?') +
               '" class="' + UI.INPUT_CLASS + ' mt-3 py-2.5 text-sm">'
             : '') +
+
+          photoField(item, state, {
+            required: damaged,
+            kind: 'in',
+            hint: damaged
+              ? 'A photo of the damage is required. Six months from now it is the only ' +
+                'thing that can settle whether it left the store that way.'
+              : 'Optional — useful if you want a record of how it came back.'
+          }) +
         '</div>' +
       '</details>';
     }).join('');
@@ -1997,10 +2193,283 @@
         b.perItem[id] = Object.assign({}, b.perItem[id], { damage_notes: el.value });
       });
     });
+
+    wirePhotoFields(host, function (assetId, photoUrl) {
+      b.perItem[assetId] = Object.assign({}, b.perItem[assetId], { photo_url: photoUrl });
+      renderBackCheckList();
+      updateBackConfirm();
+    });
+  }
+
+  /**
+   * The camera control that appears under an item.
+   *
+   * `capture="environment"` asks a phone for the rear camera and the camera
+   * app directly, rather than the photo library — the picture is nearly
+   * always being taken right now, of the thing on the table.
+   */
+  function photoField(item, state, opts) {
+    var url = state.photo_url || '';
+    var required = !!opts.required;
+    var missingIt = required && !url;
+
+    return '<div class="mt-3 rounded-xl p-3 ' +
+      (missingIt ? 'bg-amber-50 ring-1 ring-amber-300' : 'bg-stone-50') + '">' +
+
+      '<div class="flex items-center gap-3">' +
+        '<span class="text-lg" aria-hidden="true">📷</span>' +
+        '<span class="min-w-0 flex-1">' +
+          '<span class="block text-sm font-medium ' +
+            (missingIt ? 'text-amber-900' : 'text-stone-700') + '">' +
+            (url ? 'Photo taken' : required ? 'Photo required' : 'Add a photo') + '</span>' +
+          '<span class="block text-xs ' +
+            (missingIt ? 'text-amber-800' : 'text-stone-500') + '">' +
+            UI.esc(opts.hint || '') + '</span>' +
+        '</span>' +
+
+        (url
+          ? '<button type="button" data-action="photo-clear" ' +
+            'data-value="' + UI.esc(item.asset_id) + '" ' +
+            'class="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium text-red-600 ' +
+            'hover:bg-red-50">Remove</button>'
+          : '') +
+
+        '<button type="button" data-photo-take="' + UI.esc(item.asset_id) + '" ' +
+          'data-photo-kind="' + (opts.kind || 'in') + '" ' +
+          'class="shrink-0 rounded-xl px-3 py-2 text-sm font-semibold ' +
+          (missingIt ? 'bg-amber-500 text-white' : 'bg-white text-stone-700 ring-1 ' +
+           'ring-inset ring-stone-300') + '">' +
+          (url ? 'Retake' : '\ud83d\udcf7 Take photo') +
+        '</button>' +
+      '</div>' +
+
+      (url
+        ? '<img src="' + UI.esc(url) + '" alt="Photo of ' + UI.esc(item.name) + '" ' +
+          'class="mt-3 max-h-48 w-full rounded-lg object-contain bg-white">'
+        : '') +
+
+      '<p data-photo-status="' + UI.esc(item.asset_id) + '" ' +
+        'class="mt-2 hidden text-xs text-stone-500"></p>' +
+    '</div>';
+  }
+
+  /* ---------------- taking a photo in the app ---------------------- */
+
+  /**
+   * A full-screen camera, the same shape as the QR scanner.
+   *
+   * Deliberately not a file picker. On a phone a picker opens the photo
+   * library first and the camera second, which is backwards — the picture is
+   * always of the thing on the table right now. A viewfinder and a shutter is
+   * one tap; a picker is three and a wrong turn.
+   *
+   * Resolves to a data URL, or null if the volunteer backed out. Falls back to
+   * the file input when there is no camera (a desktop, or permission refused).
+   */
+  function takePhoto(title) {
+    return new Promise(function (resolve) {
+      var host = document.getElementById('scanner-host');
+      var stream = null;
+      var settled = false;
+
+      function finish(value) {
+        if (settled) return;
+        settled = true;
+        if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+        host.innerHTML = '';
+        document.removeEventListener('keydown', onKey);
+        resolve(value);
+      }
+
+      function onKey(e) { if (e.key === 'Escape') finish(null); }
+      document.addEventListener('keydown', onKey);
+
+      host.innerHTML =
+        '<div class="fixed inset-0 z-[70] flex flex-col bg-stone-900">' +
+          '<div class="flex items-center gap-3 px-4 py-3 text-white">' +
+            '<button type="button" data-photo-cancel ' +
+              'class="rounded-lg px-3 py-2 text-sm font-medium text-white/80 ' +
+              'hover:bg-white/10">Cancel</button>' +
+            '<span class="min-w-0 flex-1 truncate text-center text-sm font-semibold">' +
+              UI.esc(title || 'Take a photo') + '</span>' +
+            '<span class="w-16"></span>' +
+          '</div>' +
+
+          '<div class="relative flex-1 overflow-hidden bg-black">' +
+            '<video data-photo-video class="h-full w-full object-contain" ' +
+              'playsinline muted autoplay></video>' +
+            '<img data-photo-preview class="absolute inset-0 hidden h-full w-full ' +
+              'object-contain" alt="">' +
+          '</div>' +
+
+          '<p data-photo-msg class="px-4 py-2 text-center text-sm text-white/70">' +
+            'Starting the camera\u2026</p>' +
+
+          '<div data-photo-controls class="flex items-center justify-center gap-6 ' +
+            'px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2">' +
+            '<button type="button" data-photo-shutter ' +
+              'class="h-20 w-20 rounded-full border-4 border-white bg-white/20 ' +
+              'active:scale-95 disabled:opacity-30" aria-label="Take the photo"></button>' +
+          '</div>' +
+
+          '<div data-photo-confirm class="hidden items-center justify-center gap-3 ' +
+            'px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2">' +
+            '<button type="button" data-photo-retake ' +
+              'class="rounded-xl bg-white/10 px-5 py-3 text-base font-semibold text-white">' +
+              'Retake</button>' +
+            '<button type="button" data-photo-use ' +
+              'class="rounded-xl bg-saffron-600 px-6 py-3 text-base font-semibold text-white">' +
+              'Use this photo</button>' +
+          '</div>' +
+
+          // Always present: the way out when there is no usable camera.
+          '<div class="px-4 pb-4 text-center">' +
+            '<label class="cursor-pointer text-xs text-white/60 underline">' +
+              'Choose a photo instead' +
+              '<input type="file" accept="image/*" class="hidden" data-photo-fallback>' +
+            '</label>' +
+          '</div>' +
+        '</div>';
+
+      var video = host.querySelector('[data-photo-video]');
+      var preview = host.querySelector('[data-photo-preview]');
+      var msg = host.querySelector('[data-photo-msg]');
+      var controls = host.querySelector('[data-photo-controls]');
+      var confirm = host.querySelector('[data-photo-confirm]');
+      var shutter = host.querySelector('[data-photo-shutter]');
+      var captured = null;
+
+      function say(text) { msg.textContent = text || ''; }
+
+      function showPreview(dataUrl) {
+        captured = dataUrl;
+        preview.src = dataUrl;
+        preview.classList.remove('hidden');
+        video.classList.add('hidden');
+        controls.classList.add('hidden');
+        confirm.classList.remove('hidden');
+        confirm.classList.add('flex');
+        say('About ' + UI.dataUrlKb(dataUrl) + ' KB');
+      }
+
+      function backToLive() {
+        captured = null;
+        preview.classList.add('hidden');
+        video.classList.remove('hidden');
+        confirm.classList.add('hidden');
+        confirm.classList.remove('flex');
+        controls.classList.remove('hidden');
+        say('');
+      }
+
+      host.querySelector('[data-photo-cancel]').addEventListener('click', function () {
+        finish(null);
+      });
+      host.querySelector('[data-photo-retake]').addEventListener('click', backToLive);
+      host.querySelector('[data-photo-use]').addEventListener('click', function () {
+        finish(captured);
+      });
+
+      // Same downscale as the file path, so uploads stay small either way.
+      shutter.addEventListener('click', function () {
+        if (!video.videoWidth) return;
+        var maxEdge = 1280;
+        var scale = Math.min(1, maxEdge / Math.max(video.videoWidth, video.videoHeight));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(video.videoWidth * scale);
+        canvas.height = Math.round(video.videoHeight * scale);
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        scanFeedback(true);
+        showPreview(canvas.toDataURL('image/jpeg', 0.7));
+      });
+
+      host.querySelector('[data-photo-fallback]').addEventListener('change', async function () {
+        var file = this.files && this.files[0];
+        if (!file) return;
+        try {
+          showPreview(await UI.shrinkImage(file));
+        } catch (e) {
+          say(e.message || 'That file could not be used.');
+        }
+      });
+
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } }
+      }).then(function (s) {
+        if (settled) { s.getTracks().forEach(function (t) { t.stop(); }); return; }
+        stream = s;
+        video.srcObject = s;
+        say('');
+      }).catch(function () {
+        // No camera, or refused. The picker below is still there.
+        shutter.disabled = true;
+        say('The camera could not start. Use "Choose a photo instead" below.');
+      });
+    });
+  }
+
+  /** Takes a photo, uploads it, and hands the resulting Drive link back. */
+  function wirePhotoFields(host, onUploaded) {
+    function upload(assetId, kind, dataUrl) {
+      var status = host.querySelector('[data-photo-status="' + assetId + '"]');
+      function say(text) {
+        if (!status) return;
+        status.textContent = text;
+        status.classList.toggle('hidden', !text);
+      }
+
+      say('Uploading ' + UI.dataUrlKb(dataUrl) + ' KB\u2026');
+      return Api.uploadPhoto({ data_url: dataUrl, asset_id: assetId, kind: kind })
+        .then(function (result) { onUploaded(assetId, result.photo_url); })
+        .catch(function (e) { say(''); App.handleError(e); });
+    }
+
+    host.querySelectorAll('[data-photo-take]').forEach(function (button) {
+      button.addEventListener('click', async function () {
+        var assetId = button.dataset.photoTake;
+        var item = App.itemById(assetId);
+        var dataUrl = await takePhoto(item ? item.name : assetId);
+        if (dataUrl) await upload(assetId, button.dataset.photoKind || 'in', dataUrl);
+      });
+    });
+  }
+
+  /** Used by both flows, so it has to know which one is on screen. */
+  App.actions['photo-clear'] = function (button) {
+    var id = button.dataset.value;
+
+    if (App.route.name === 'give') {
+      delete giveState().photos[id];
+      App.render();
+      return;
+    }
+
+    var b = backState();
+    b.perItem[id] = Object.assign({}, b.perItem[id], { photo_url: '' });
+    renderBackCheckList();
+    updateBackConfirm();
+  };
+
+  /** Blocks the confirm button while a damaged item still has no photo. */
+  function updateBackConfirm() {
+    var b = backState();
+    var outstanding = backLines().filter(function (line) {
+      var st = b.perItem[line.item.asset_id] || {};
+      return st.condition_in === 'needs_repair' && !st.photo_url;
+    });
+
+    var button = document.getElementById('back-confirm');
+    if (button) {
+      button.disabled = outstanding.length > 0;
+      button.textContent = outstanding.length
+        ? 'Photo needed for ' + UI.plural(outstanding.length, 'item')
+        : 'Take them back in';
+    }
   }
 
   function mountBackCheck() {
     renderBackCheckList();
+    updateBackConfirm();
   }
 
   App.actions['back-mark'] = function (button) {
@@ -2040,7 +2509,8 @@
             asset_id: line.item.asset_id,
             condition_in: state.condition_in || 'good',
             missing: !!state.missing,
-            damage_notes: state.damage_notes || ''
+            damage_notes: state.damage_notes || '',
+            photo_url: state.photo_url || ''
           };
         })
       });
@@ -2060,7 +2530,19 @@
         });
       }
     } catch (e) {
-      App.handleError(e);
+      if (e.code === 'PHOTO_REQUIRED') {
+        // The browser blocks this already; this is the server saying no to a
+        // stale page or a request that skipped the form.
+        await UI.dialog({
+          title: 'A photo is needed',
+          message: e.message,
+          buttons: [{ label: 'OK', value: 'ok', variant: 'primary' }]
+        });
+        renderBackCheckList();
+        updateBackConfirm();
+      } else {
+        App.handleError(e);
+      }
       restore();
     }
   };
@@ -2253,43 +2735,98 @@
    * but they should not be the first thing you scroll past on the way to next
    * weekend's sabha.
    */
+  var eventSearch = '';
+
+  /** The year an event belongs to, for grouping the archive. */
+  function eventYear(event) {
+    var d = event.end_date || event.start_date || '';
+    return /^\d{4}/.test(d) ? d.slice(0, 4) : 'No date';
+  }
+
+  /**
+   * Events, soonest first.
+   *
+   * Finished ones drop into a collapsed "Finished" section grouped by year.
+   * Nothing is ever deleted — an event from 2024 still has to explain a
+   * movement record from 2024 — but three years of weekly sabhas is several
+   * hundred rows, so they collapse to one line per year and only the current
+   * year opens by default. That scales indefinitely without anyone having to
+   * tidy up.
+   */
   App.screens.events = function () {
     var all = App.topLevelEventsSorted();
+
+    var needle = eventSearch.toLowerCase();
+    function matches(e) {
+      if (!needle) return true;
+      var hay = (e.name + ' ' + (e.location || '') + ' ' + (e.centre || '')).toLowerCase();
+      if (hay.indexOf(needle) !== -1) return true;
+      return App.subEventsSorted(e.event_id).some(function (sub) {
+        return sub.name.toLowerCase().indexOf(needle) !== -1;
+      });
+    }
+
     var live = all.filter(function (e) {
+      if (!matches(e)) return false;
       if (!App.isArchivedEvent(e)) return true;
-      // A finished parent with a sub-event still running stays up top.
-      return App.subEventsSorted(e.event_id).some(function (s) {
-        return !App.isArchivedEvent(s);
+      // A finished parent still shows up top while a sub-event is running.
+      return App.subEventsSorted(e.event_id).some(function (sub) {
+        return !App.isArchivedEvent(sub);
       });
     });
-    var archived = all.filter(function (e) { return live.indexOf(e) === -1; });
+    var archived = all.filter(function (e) {
+      return matches(e) && live.indexOf(e) === -1;
+    });
 
     if (!all.length) {
       return UI.pageTitle('Events', null,
           UI.button('+ New event', { action: 'event-new', variant: 'secondary' })) +
-        UI.emptyState('📅', 'No events yet',
+        UI.emptyState('\ud83d\udcc5', 'No events yet',
           'Add an event before you give any instruments out to it.',
           UI.button('+ New event', { action: 'event-new' }));
     }
 
-    return UI.pageTitle('Events', 'Soonest first',
+    // Newest year first — last year's Diwali is looked up far more often than
+    // something from four years ago.
+    var byYear = {};
+    var years = [];
+    archived.forEach(function (e) {
+      var y = eventYear(e);
+      if (!byYear[y]) { byYear[y] = []; years.push(y); }
+      byYear[y].push(e);
+    });
+    years.sort(function (a, b) { return b.localeCompare(a); });
+    var thisYear = String(App.data.today).slice(0, 4);
+
+    return UI.pageTitle('Events', 'Coming up first. Finished ones are kept below.',
         UI.button('+ New event', { action: 'event-new', variant: 'secondary' })) +
+
+      '<div class="relative mb-4">' +
+        '<input type="search" id="event-q" value="' + UI.esc(eventSearch) + '" ' +
+          'placeholder="Search events\u2026" autocomplete="off" ' +
+          'class="' + UI.INPUT_CLASS + ' pr-20">' +
+        '<button type="button" id="event-clear" data-action="events-clear-search" ' +
+          (eventSearch ? '' : 'hidden ') +
+          'class="absolute inset-y-0 right-0 my-1.5 mr-1.5 rounded-lg bg-stone-100 px-3 ' +
+          'text-sm font-medium text-stone-600 hover:bg-stone-200">Clear</button>' +
+      '</div>' +
 
       (live.length
         ? '<div class="space-y-3">' + live.map(eventCard).join('') + '</div>'
         : '<p class="rounded-2xl border-2 border-dashed border-stone-200 px-4 py-8 ' +
-          'text-center text-sm text-stone-500">Nothing coming up. Everything is ' +
-          'in Finished below.</p>') +
+          'text-center text-sm text-stone-500">' +
+          (eventSearch ? 'Nothing coming up matches that search.'
+                       : 'Nothing coming up. Everything is in Finished below.') + '</p>') +
 
       (archived.length
         ? '<details class="mt-5 overflow-hidden rounded-2xl bg-white shadow-sm ' +
-            'ring-1 ring-stone-900/5">' +
+            'ring-1 ring-stone-900/5"' + (eventSearch ? ' open' : '') + '>' +
             '<summary class="flex cursor-pointer items-center gap-3 px-4 py-3.5">' +
-              '<span class="text-lg" aria-hidden="true">🗄️</span>' +
+              '<span class="text-lg" aria-hidden="true">\ud83d\uddc4\ufe0f</span>' +
               '<span class="min-w-0 flex-1">' +
                 '<span class="block text-sm font-semibold text-stone-700">Finished</span>' +
                 '<span class="block text-xs text-stone-500">' +
-                  'Kept for their history — still searchable</span>' +
+                  'Kept for their history \u2014 still searchable, never deleted</span>' +
               '</span>' +
               '<span class="shrink-0 rounded-full bg-stone-100 px-2.5 py-1 text-sm ' +
                 'font-semibold text-stone-600">' + archived.length + '</span>' +
@@ -2298,11 +2835,51 @@
                 'aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" ' +
                 'd="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>' +
             '</summary>' +
-            '<div class="space-y-2 border-t border-stone-100 p-2">' +
-              archived.map(eventCard).join('') +
+
+            '<div class="border-t border-stone-100 p-2">' +
+              years.map(function (year) {
+                var open = eventSearch || year === thisYear;
+                return '<details class="rounded-xl"' + (open ? ' open' : '') + '>' +
+                  '<summary class="flex cursor-pointer items-center gap-3 rounded-xl px-3 ' +
+                    'py-2.5 hover:bg-stone-50">' +
+                    '<span class="min-w-0 flex-1 text-sm font-semibold text-stone-700">' +
+                      UI.esc(year) + '</span>' +
+                    '<span class="shrink-0 text-xs text-stone-400">' +
+                      UI.plural(byYear[year].length, 'event') + '</span>' +
+                    '<svg class="chevron h-4 w-4 shrink-0 text-stone-400 transition-transform" ' +
+                      'fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" ' +
+                      'aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" ' +
+                      'd="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>' +
+                  '</summary>' +
+                  '<div class="space-y-2 pb-2 pl-2">' +
+                    byYear[year].map(eventCard).join('') +
+                  '</div>' +
+                '</details>';
+              }).join('') +
             '</div>' +
           '</details>'
         : '');
+  };
+
+  App.screens.events.mount = function () {
+    var box = document.getElementById('event-q');
+    if (!box) return;
+    box.addEventListener('input', function () {
+      eventSearch = box.value;
+      var clear = document.getElementById('event-clear');
+      if (clear) clear.hidden = !eventSearch;
+      App.render();
+      var again = document.getElementById('event-q');
+      if (again) {
+        again.focus();
+        again.setSelectionRange(again.value.length, again.value.length);
+      }
+    });
+  };
+
+  App.actions['events-clear-search'] = function () {
+    eventSearch = '';
+    App.render();
   };
 
   function dateRange(event) {

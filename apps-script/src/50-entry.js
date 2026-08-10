@@ -48,6 +48,7 @@ var WRITE_ACTIONS = {
   saveEvent: actionSaveEvent,
   deleteEvent: actionDeleteEvent,
   bulkCheckinEvent: actionBulkCheckinEvent,
+  uploadPhoto: actionUploadPhoto,
   saveSettings: actionSaveSettings
 };
 
@@ -107,6 +108,7 @@ function handleThrown(err) {
     var payload = { ok: false, error: { code: err.code, message: err.message } };
     if (err.blockers) payload.error.blockers = err.blockers;
     if (err.conflicts) payload.error.conflicts = err.conflicts;
+    if (err.photo_required) payload.error.photo_required = err.photo_required;
     return jsonOut(payload);
   }
   console.error('Unhandled error: ' + (err && err.stack ? err.stack : err));

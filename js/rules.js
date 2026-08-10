@@ -450,6 +450,7 @@ var Rules = (function () {
     var lines = [];
     var seen = {};
     var warnings = [];
+    var photoRequired = [];
 
     function addLine(assetId, movement, spec) {
       if (seen[assetId]) return;
@@ -474,6 +475,19 @@ var Rules = (function () {
         damage = s.damage_notes || '';
       }
 
+      /*
+       * A damaged return has to carry a photo.
+       *
+       * Six months later, "the skin was already split when we collected it"
+       * is unanswerable without one. A photo settles it, and the moment to
+       * take it is while the instrument is still on the table.
+       *
+       * Not required for a missing item — there is nothing to photograph.
+       */
+      if (outcome === 'damaged' && !String(s.photo_url || '').trim()) {
+        photoRequired.push({ asset_id: assetId, name: item ? item.name : assetId });
+      }
+
       var line = {
         asset_id: assetId,
         movement_id: movement.movement_id,
@@ -482,6 +496,7 @@ var Rules = (function () {
         outcome: outcome,
         new_status: newStatus,
         new_condition: condition || (item ? item.current_condition : ''),
+        photo_url: String(s.photo_url || '').trim(),
         via_parent_asset_id: movement.via_parent_asset_id || ''
       };
       seen[assetId] = line;
@@ -529,6 +544,21 @@ var Rules = (function () {
     }
 
     if (!lines.length) return err('ITEM_NOT_OUT', 'Nothing in this list is currently checked out.');
+
+    if (photoRequired.length) {
+      var names = photoRequired.map(function (p) { return p.name; });
+      return {
+        ok: false,
+        error: {
+          code: 'PHOTO_REQUIRED',
+          message: (names.length === 1 ? names[0] + ' is' : names.join(', ') + ' are') +
+                   ' marked as damaged, so a photo of the damage is needed before this ' +
+                   'can be saved.'
+        },
+        photo_required: photoRequired
+      };
+    }
+
     return { ok: true, lines: lines, warnings: warnings };
   }
 

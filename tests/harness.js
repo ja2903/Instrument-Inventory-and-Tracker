@@ -6,23 +6,49 @@
 var results = { passed: 0, failed: 0, failures: [] };
 var currentSuite = '';
 
+var suites = [];
+var currentTests = null;
+
 function suite(name, fn) {
   currentSuite = name;
-  console.log('\n\x1b[1m' + name + '\x1b[0m');
-  fn();
+  currentTests = [];
+  suites.push({ name: name, tests: currentTests });
+  fn();                       // registration only — nothing runs yet
+  currentTests = null;
   currentSuite = '';
 }
 
 function test(name, fn) {
-  try {
-    fn();
-    results.passed++;
-    console.log('  \x1b[32m✓\x1b[0m ' + name);
-  } catch (e) {
-    results.failed++;
-    results.failures.push({ suite: currentSuite, name: name, error: e });
-    console.log('  \x1b[31m✗ ' + name + '\x1b[0m');
-    console.log('      ' + String(e.message).split('\n').join('\n      '));
+  if (!currentTests) throw new Error('test("' + name + '") called outside a suite');
+  currentTests.push({ name: name, fn: fn, suite: currentSuite });
+}
+
+/**
+ * Runs everything that was registered, in order, awaiting each test.
+ *
+ * Tests are collected first and executed here for one reason: a test function
+ * may be async. Executing them as they were registered meant an async
+ * failure surfaced as an unhandled rejection long after the run had already
+ * printed "all passed" — a suite that cannot fail is worse than no suite.
+ */
+async function run() {
+  for (var s = 0; s < suites.length; s++) {
+    console.log('\n\x1b[1m' + suites[s].name + '\x1b[0m');
+    var tests = suites[s].tests;
+    for (var i = 0; i < tests.length; i++) {
+      var entry = tests[i];
+      try {
+        await entry.fn();
+        results.passed++;
+        console.log('  \x1b[32m✓\x1b[0m ' + entry.name);
+      } catch (e) {
+        results.failed++;
+        results.failures.push({ suite: entry.suite, name: entry.name, error: e });
+        console.log('  \x1b[31m✗ ' + entry.name + '\x1b[0m');
+        console.log('      ' + String(e && e.message ? e.message : e)
+          .split('\n').join('\n      '));
+      }
+    }
   }
 }
 
@@ -84,6 +110,6 @@ function summary() {
 }
 
 module.exports = {
-  suite: suite, test: test, eq: eq, ok: ok, notOk: notOk, fail: fail,
+  suite: suite, test: test, run: run, eq: eq, ok: ok, notOk: notOk, fail: fail,
   expectOk: expectOk, expectErr: expectErr, ids: ids, summary: summary
 };

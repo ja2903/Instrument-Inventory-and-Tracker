@@ -91,81 +91,121 @@ details[open] > summary .chevron { transform: rotate(180deg); }
 
 /* ---------------- printing ------------------------------------- */
 /*
- * A4 sheet of QR labels. Every size here is in millimetres deliberately and
- * the arithmetic below is load-bearing — do not "tidy" any of it into rem.
+ * Two label layouts, both A4. Every number here is load-bearing — do not
+ * "tidy" any of it into rem, and if you change a column count, redo the sum.
  *
- *   A4 portrait          210mm wide
- *   @page margin         10mm each side
- *   printable width      190mm
+ * ============ 1. AVERY L7160 / J8160 (the default) ============
  *
- *   3 columns x 60mm  +  2 gaps x 4mm  =  188mm      fits, with 2mm to spare
+ * The most widely sold A4 address label in the UK: 63.5 x 38.1mm, 21 per
+ * sheet, 3 across and 7 down. Buying a box means no cutting at all.
  *
- * An earlier version used 4 columns of 45mm with 4mm gaps — 192mm — which is
- * 2mm WIDER than the page, so the fourth column was silently clipped or
- * bumped onto its own row. If you change the column count, redo this sum.
+ *   left margin      7.2mm      top margin   15.1mm
+ *   column pitch     66mm       (63.5 label + 2.5 gap)
+ *   row pitch        38.1mm     (no vertical gap — labels touch)
  *
- *   printable height     277mm
- *   7 rows x 36mm  +  6 gaps x 4mm  =  276mm         21 labels per sheet
+ *   width  used: 7.2 + 3(63.5) + 2(2.5) =  202.7mm   fits 210
+ *   height used: 15.1 + 7(38.1)         =  281.8mm   fits 297
  *
- * QR sizing. QR.toSvg is called with quiet: 2, so the SVG box is
- * (21 modules + 4) = 25 units for a normal asset id:
+ * @page margin MUST be 0 for this: the offsets are the label stock's own,
+ * and adding a printer margin on top pushes everything down a row.
  *
- *   30mm box  x  21/25  =  25.2mm of actual black symbol      >= 25mm minimum
- *   module size         =  30 / 25 = 1.2mm                    >> 0.5mm floor
+ * ============ 2. PLAIN A4 (cut them out) ============
  *
- * The quiet zone the spec wants (4 modules) is made up of 2 modules inside
- * the SVG plus the label's own 2.5mm white padding — 2.4mm + 2.5mm = 4.9mm,
- * against the 4.8mm required. That is why the padding is not decorative.
+ *   10mm page margin, 3 columns x 60mm with 4mm gaps = 188mm, fits 190mm.
+ *   36mm tall with 4mm gaps, 7 rows = 276mm, fits 277mm. Dashed cut guides.
+ *
+ * ============ QR SIZING (both layouts) ============
+ *
+ * QR.toSvg is called with quiet: 2, so the SVG box is (21 modules + 4) = 25
+ * units for a normal asset id:
+ *
+ *   30mm box x 21/25 = 25.2mm of black symbol      >= the 25mm minimum
+ *   module size      = 30 / 25 = 1.2mm             >> the ~0.5mm floor
+ *
+ * The 4-module quiet zone the spec wants is 2 modules inside the SVG plus the
+ * label's own white padding. That padding is not decorative.
  */
 
-@page {
-  size: A4 portrait;
-  margin: 10mm;
-}
+@page { size: A4 portrait; margin: 0; }
 
 @media print {
   body { background: #fff !important; }
 
-  /* Everything that is not the label sheet disappears. */
   header, nav, #scan-fab, #toasts, #dialog-host, #scanner-host,
   .no-print { display: none !important; }
 
   main { padding: 0 !important; max-width: none !important; }
 
+  /* ---- default: Avery L7160 / J8160 ---- */
   .label-sheet {
     display: grid;
-    grid-template-columns: repeat(3, 60mm);
-    gap: 4mm;
+    grid-template-columns: repeat(3, 63.5mm);
+    column-gap: 2.5mm;
+    row-gap: 0;
     justify-content: start;
+    padding: 15.1mm 0 0 7.2mm;
+    box-sizing: border-box;
   }
 
   .label {
     break-inside: avoid;
     page-break-inside: avoid;
-    border: 0.3mm dashed #bbb;          /* a cutting guide, not decoration */
-    border-radius: 2mm;
-    padding: 2.5mm;                     /* also serves as QR quiet zone — see above */
-    height: 36mm;
+    height: 38.1mm;
+    padding: 3mm 2.5mm;          /* also the QR quiet zone — see above */
     display: flex;
     align-items: center;
     gap: 2.5mm;
     background: #fff;
+    box-sizing: border-box;
+    border: 0;                   /* pre-cut stock needs no cutting guide */
+    overflow: hidden;
   }
 
-  .label-qr { width: 30mm; height: 30mm; flex: none; }   /* 25.2mm symbol — see above */
-  .label-text { min-width: 0; }
+  /* ---- alternative: plain paper, cut them out ---- */
+  .label-sheet.sheet-plain {
+    grid-template-columns: repeat(3, 60mm);
+    column-gap: 4mm;
+    row-gap: 4mm;
+    padding: 10mm 0 0 10mm;
+  }
+  .sheet-plain .label {
+    height: 36mm;
+    border: 0.3mm dashed #bbb;   /* a cutting guide, not decoration */
+    border-radius: 2mm;
+  }
+
+  .label-qr { width: 30mm; height: 30mm; flex: none; }   /* 25.2mm symbol */
+  .label-qr svg { width: 100%; height: 100%; display: block; }
+  .label-text { min-width: 0; overflow: hidden; }
   .label-id { font-size: 11pt; font-weight: 700; letter-spacing: .02em; line-height: 1.1; }
   .label-name { font-size: 7pt; line-height: 1.2; margin-top: .8mm; }
   .label-parent { font-size: 6pt; color: #444; line-height: 1.2; margin-top: .5mm; }
   .label-org { font-size: 5.5pt; color: #666; line-height: 1.1; margin-top: 1mm; }
 
   /*
-   * Kit bags get the bigger tag the brief asks for: 40mm of symbol.
-   *   48mm box x 21/25 = 40.3mm symbol
-   * Spans 2 columns (60 + 4 + 60 = 124mm) so the text has room beside it.
+   * Kit bag tags print on their OWN page, always on plain paper.
+   *
+   * The brief asks for a 40mm QR on a bag tag, and 40mm of symbol needs a
+   * 48mm box — taller than an Avery L7160 label is (38.1mm). Mixing them into
+   * the address-label grid also left holes wherever a double-size tag landed,
+   * wasting bought stock. So they are separated: peel-and-stick sheet for the
+   * instruments, one plain sheet of luggage tags to cut and tie on.
    */
-  .label-bag { grid-column: span 2; height: 54mm; }
-  .label-bag .label-qr { width: 48mm; height: 48mm; }
+  .sheet-bags {
+    break-before: page;
+    page-break-before: always;
+    display: grid;
+    grid-template-columns: repeat(2, 90mm);
+    gap: 6mm;
+    padding: 10mm 0 0 10mm;
+    box-sizing: border-box;
+  }
+  .sheet-bags .label {
+    height: 60mm;
+    border: 0.3mm dashed #bbb;
+    border-radius: 2mm;
+  }
+  .label-bag .label-qr { width: 48mm; height: 48mm; }   /* 40.3mm symbol */
   .label-bag .label-id { font-size: 16pt; }
   .label-bag .label-name { font-size: 9pt; }
 }

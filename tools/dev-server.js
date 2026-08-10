@@ -51,6 +51,28 @@ var server = http.createServer(function (req, res) {
 
   /* ---- the stand-in Apps Script web app ---- */
   if (url.pathname === '/api') {
+    /*
+     * --slow N delays every API response by N milliseconds, to imitate an
+     * Apps Script cold start. Worth keeping: a guard that fired during this
+     * wait once wiped out a perfectly healthy app, and this is how that gets
+     * reproduced without waiting for Google to be slow on its own.
+     */
+    var slowArg = process.argv.indexOf('--slow');
+    var delay = slowArg !== -1 ? Number(process.argv[slowArg + 1] || 4000) : 0;
+    if (delay > 0) {
+      var original = res.end.bind(res);
+      var originalWriteHead = res.writeHead.bind(res);
+      var buffered = null;
+      res.writeHead = function () { buffered = arguments; return res; };
+      res.end = function (body) {
+        setTimeout(function () {
+          if (buffered) originalWriteHead.apply(null, buffered);
+          original(body);
+        }, delay);
+        return res;
+      };
+    }
+
     if (req.method === 'GET') {
       var params = {};
       url.searchParams.forEach(function (v, k) { params[k] = v; });

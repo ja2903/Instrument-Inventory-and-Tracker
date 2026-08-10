@@ -107,6 +107,242 @@ module.exports = function () {
   });
 
   /* ---------------------------------------------------------------- */
+  suite('Finished events get out of the way by themselves', function () {
+
+    var DOM = require('./dom-stub.js');
+
+    /** A browser app with a hand-built set of events, to control the dates. */
+    async function withEvents(events, extras) {
+      var payload = Object.assign({
+        today: '2026-08-08', version: '1.0.0',
+        centres: [], instrumentTypes: [], qualityGrades: [],
+        events: events, items: [], openAllocations: [], openMovements: []
+      }, extras || {});
+      var s = DOM.loadBrowserApp(payload);
+      await s.App.refresh({ showSpinner: false });
+      return s;
+    }
+
+    function ev(id, name, start, end, status) {
+      return { event_id: id, name: name, parent_event_id: '',
+               start_date: start, end_date: end || start,
+               location: '', centre: '', status: status || 'planned', children: [] };
+    }
+
+    test('an event whose end date has passed archives itself', async function () {
+      // Nobody remembers to mark a sabha "completed" afterwards. If archiving
+      // depended on that, the Finished list would stay empty forever and the
+      // live list would grow without limit.
+      var s = await withEvents([ev('EV-1', 'Last month', '2026-07-01', '2026-07-02')]);
+      ok(s.App.isArchivedEvent(s.App.eventById('EV-1')));
+    });
+
+    test('a future event does not', async function () {
+      var s = await withEvents([ev('EV-1', 'Next month', '2026-09-01', '2026-09-02')]);
+      notOk(s.App.isArchivedEvent(s.App.eventById('EV-1')));
+    });
+
+    test('an event ending TODAY is still live', async function () {
+      var s = await withEvents([ev('EV-1', 'Today', '2026-08-08', '2026-08-08')]);
+      notOk(s.App.isArchivedEvent(s.App.eventById('EV-1')));
+    });
+
+    test('a past event with something still out is NOT archived', async function () {
+      // The important one: a sabha that finished yesterday with a harmonium
+      // unaccounted for is emphatically not finished with.
+      var s = await withEvents([ev('EV-1', 'Yesterday', '2026-08-07', '2026-08-07')], {
+        items: [{
+          asset_id: 'HAR-001', name: 'Harmonium', instrument_type: 'Harmonium',
+          quality_grade: 'Aradhana', parent_asset_id: '', is_kit: false,
+          status: 'checked_out', current_condition: 'good', active: true, children: [],
+          live: { event_id: 'EV-1', sub_event_id: '', expected_return_date: '2026-08-07',
+                  days_overdue: 1, via_parent_asset_id: '', centre: '' }
+        }]
+      });
+      notOk(s.App.isArchivedEvent(s.App.eventById('EV-1')),
+            'it cannot be filed away while an instrument is missing from it');
+    });
+
+    test('an undated event is never auto-archived', async function () {
+      var s = await withEvents([ev('EV-1', 'No dates', '', '')]);
+      notOk(s.App.isArchivedEvent(s.App.eventById('EV-1')));
+    });
+
+    test('a cancelled event is archived whatever its dates say', async function () {
+      var s = await withEvents([ev('EV-1', 'Called off', '2026-12-01', '2026-12-02', 'cancelled')]);
+      ok(s.App.isArchivedEvent(s.App.eventById('EV-1')));
+    });
+
+    test('the give-out dropdown offers only what is still to come', async function () {
+      var s = await withEvents([
+        ev('EV-1', 'Old sabha', '2025-03-01', '2025-03-01'),
+        ev('EV-2', 'Older sabha', '2024-03-01', '2024-03-01'),
+        ev('EV-3', 'Coming up', '2026-09-01', '2026-09-02')
+      ]);
+      var labels = s.App.eventOptions().map(function (o) { return o.label.trim(); });
+      eq(labels, ['Coming up'], 'finished events are not choices when giving out');
+    });
+
+    test('but they are still reachable when searching history', async function () {
+      var s = await withEvents([
+        ev('EV-1', 'Old sabha', '2025-03-01', '2025-03-01'),
+        ev('EV-3', 'Coming up', '2026-09-01', '2026-09-02')
+      ]);
+      var labels = s.App.eventOptions(true).map(function (o) { return o.label.trim(); });
+      ok(labels.indexOf('Old sabha') !== -1, 'the Instruments filter can still see it');
+    });
+
+    test('the Events screen groups the archive by year', async function () {
+      var s = await withEvents([
+        ev('EV-1', 'A 2024', '2024-03-01'), ev('EV-2', 'B 2024', '2024-09-01'),
+        ev('EV-3', 'C 2025', '2025-03-01'), ev('EV-4', 'Coming up', '2026-09-01')
+      ]);
+      var html = s.App.screens.events([]);
+      ok(html.indexOf('2024') !== -1 && html.indexOf('2025') !== -1);
+      ok(html.indexOf('never deleted') !== -1, 'and says nothing is thrown away');
+    });
+  });
+
+  /* ---------------------------------------------------------------- */
+  suite('A damaged return needs a photo', function () {
+
+    function kitOut(app) {
+      app.post('checkout', {
+        asset_ids: ['TAB-014'], event_id: 'EV-003', centre: 'East London',
+        expected_return_date: '2026-08-12', checked_out_by: 'Nilesh'
+      });
+      return app;
+    }
+
+    var PHOTO = 'https://drive.google.com/thumbnail?id=abc123';
+
+    test('marking something damaged without a photo is refused', function () {
+      var app = kitOut(freshApp());
+      var e = expectErr(app.post('checkin', {
+        checked_in_by: 'Nilesh',
+        items: [{ asset_id: 'TAB-014' },
+                { asset_id: 'TAB-016', condition_in: 'needs_repair' }]
+      }), 'PHOTO_REQUIRED');
+      ok(e.message.indexOf('Bayyu') !== -1, 'the message names the item');
+      eq(app.rows('Movements').filter(function (m) { return m.checked_in_at; }).length, 0,
+         'the whole check-in was refused, not just that line');
+    });
+
+    test('with a photo it goes through and the link is stored', function () {
+      var app = kitOut(freshApp());
+      expectOk(app.post('checkin', {
+        checked_in_by: 'Nilesh',
+        items: [{ asset_id: 'TAB-014' },
+                { asset_id: 'TAB-016', condition_in: 'needs_repair',
+                  damage_notes: 'Skin split', photo_url: PHOTO }]
+      }));
+      var mv = app.rows('Movements').filter(function (m) { return m.asset_id === 'TAB-016'; })[0];
+      eq(mv.photo_in_url, PHOTO);
+      eq(mv.outcome, 'damaged');
+    });
+
+    test('a MISSING item needs no photo — there is nothing to photograph', function () {
+      var app = kitOut(freshApp());
+      expectOk(app.post('checkin', {
+        checked_in_by: 'Nilesh',
+        items: [{ asset_id: 'TAB-014' }, { asset_id: 'OTH-001', missing: true }]
+      }));
+    });
+
+    test('an undamaged return needs no photo', function () {
+      var app = kitOut(freshApp());
+      expectOk(app.post('checkin', {
+        checked_in_by: 'Nilesh', items: [{ asset_id: 'TAB-014' }]
+      }));
+    });
+
+    test('a photo may still be attached to a normal return', function () {
+      var app = kitOut(freshApp());
+      expectOk(app.post('checkin', {
+        checked_in_by: 'Nilesh',
+        items: [{ asset_id: 'TAB-014', photo_url: PHOTO }]
+      }));
+      var mv = app.rows('Movements').filter(function (m) { return m.asset_id === 'TAB-014'; })[0];
+      eq(mv.photo_in_url, PHOTO);
+    });
+
+    test('a photo can be recorded as the instrument goes out', function () {
+      var app = freshApp();
+      expectOk(app.post('checkout', {
+        asset_ids: ['HAR-003'], event_id: 'EV-003', centre: 'East London',
+        expected_return_date: '2026-08-12', checked_out_by: 'Nilesh',
+        photos: { 'HAR-003': PHOTO }
+      }));
+      eq(app.rows('Movements')[0].photo_out_url, PHOTO);
+    });
+
+    test('the refusal lists every item that still needs one', function () {
+      var app = kitOut(freshApp());
+      var e = expectErr(app.post('checkin', {
+        checked_in_by: 'Nilesh',
+        items: [{ asset_id: 'TAB-014' },
+                { asset_id: 'TAB-015', condition_in: 'needs_repair' },
+                { asset_id: 'TAB-016', condition_in: 'needs_repair' }]
+      }), 'PHOTO_REQUIRED');
+      eq(e.photo_required.length, 2);
+    });
+  });
+
+  /* ---------------------------------------------------------------- */
+  suite('Breaking a set open', function () {
+
+    test('a single piece can go out while the set stays available', function () {
+      var app = freshApp();
+      expectOk(app.post('checkout', {
+        asset_ids: ['TAB-015'], event_id: 'EV-002', centre: 'Ruislip',
+        expected_return_date: '2026-08-14', checked_out_by: 'Nilesh'
+      }));
+      var items = app.rows('Items');
+      function status(id) {
+        return items.filter(function (i) { return i.asset_id === id; })[0].status;
+      }
+      eq(status('TAB-015'), 'checked_out', 'the dayyu went');
+      eq(status('TAB-014'), 'available', 'the set stayed');
+      eq(status('TAB-016'), 'available', 'so did every other piece');
+    });
+
+    test('the piece is out on its own, not via the set', function () {
+      var app = freshApp();
+      app.post('checkout', {
+        asset_ids: ['TAB-015'], event_id: 'EV-002', centre: 'Ruislip',
+        expected_return_date: '2026-08-14', checked_out_by: 'Nilesh'
+      });
+      eq(app.rows('Movements')[0].via_parent_asset_id, '',
+         'a piece taken deliberately is not "via" anything');
+    });
+
+    test('several pieces can go out together, still leaving the set', function () {
+      var app = freshApp();
+      expectOk(app.post('checkout', {
+        asset_ids: ['TAB-015', 'TAB-016'], event_id: 'EV-002', centre: 'Ruislip',
+        expected_return_date: '2026-08-14', checked_out_by: 'Nilesh'
+      }));
+      eq(app.rows('Movements').length, 2);
+      eq(app.rows('Items').filter(function (i) {
+        return i.asset_id === 'TAB-014';
+      })[0].status, 'available');
+    });
+
+    test('and the set then reports how many of its pieces are out', function () {
+      var app = freshApp();
+      app.post('checkout', {
+        asset_ids: ['TAB-015'], event_id: 'EV-002', centre: 'Ruislip',
+        expected_return_date: '2026-08-14', checked_out_by: 'Nilesh'
+      });
+      var d = expectOk(app.get('bootstrap'));
+      var pieces = d.items.filter(function (i) { return i.parent_asset_id === 'TAB-014'; });
+      eq(pieces.filter(function (p) { return p.status === 'checked_out'; }).length, 1);
+      ok(pieces.filter(function (p) { return p.asset_id === 'TAB-015'; })[0].live,
+         'the piece carries live detail so the list can say where it went');
+    });
+  });
+
+  /* ---------------------------------------------------------------- */
   suite('Returning single pieces of a set (without the parent)', function () {
 
     test('two pieces can come back while the set stays out', function () {

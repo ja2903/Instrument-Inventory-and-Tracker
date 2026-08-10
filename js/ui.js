@@ -125,6 +125,52 @@ var UI = (function () {
     return parts.join(' — ');
   }
 
+  /* ---------------- photos ----------------------------------------- */
+
+  /**
+   * Shrinks a photo before it ever leaves the phone.
+   *
+   * A modern phone camera produces 3–8 MB per shot. Apps Script will not
+   * accept that in a POST body, and a volunteer on mandir wifi should not be
+   * uploading it anyway. 1280px on the long edge at JPEG 0.7 lands around
+   * 150–300 KB, which is far more detail than is needed to show a split skin.
+   */
+  function shrinkImage(file, maxEdge, quality) {
+    maxEdge = maxEdge || 1280;
+    quality = quality || 0.7;
+
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('That photo could not be read.')); };
+      reader.onload = function () {
+        var img = new Image();
+        img.onerror = function () { reject(new Error('That file is not an image.')); };
+        img.onload = function () {
+          var scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+          var canvas = document.createElement('canvas');
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+
+          var ctx = canvas.getContext('2d');
+          // White behind, so a PNG with transparency does not become black.
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /** Rough size of a data URL, for showing progress honestly. */
+  function dataUrlKb(dataUrl) {
+    var base64 = String(dataUrl).split(',')[1] || '';
+    return Math.round(base64.length * 3 / 4 / 1024);
+  }
+
   /* ---------------- building blocks -------------------------------- */
 
   function card(inner, extraClass) {
@@ -404,6 +450,7 @@ var UI = (function () {
   function scrollTop() { window.scrollTo({ top: 0, behavior: 'auto' }); }
 
   return {
+    shrinkImage: shrinkImage, dataUrlKb: dataUrlKb,
     esc: esc, dayMonth: dayMonth, fullDate: fullDate, timestamp: timestamp,
     plural: plural, daysLate: daysLate, today: today,
     STATUS: STATUS, statusKey: statusKey, statusPill: statusPill, statusLabel: statusLabel,
