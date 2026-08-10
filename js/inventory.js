@@ -473,6 +473,19 @@
             ? (m.photo_in_url ? 'Retake' : '📷 Add photo')
             : (m.photo_out_url ? 'Retake' : '📷 Add photo')) +
         '</button>' +
+
+        // One Delete per photo that actually exists, so it is always obvious
+        // which of the two is about to go.
+        (m.photo_out_url
+          ? deletePhotoButton(m.movement_id, 'out', false,
+              m.photo_in_url ? 'Delete "going out"' : 'Delete photo')
+          : '') +
+        (m.photo_in_url
+          ? deletePhotoButton(m.movement_id, 'in', m.outcome === 'damaged',
+              m.photo_out_url
+                ? (m.outcome === 'damaged' ? 'Delete damage photo' : 'Delete "coming back"')
+                : 'Delete photo')
+          : '') +
       '</div>' +
     '</li>';
   }
@@ -535,6 +548,9 @@
             'class="rounded-lg bg-white px-3 py-2 text-xs font-medium text-stone-600 ' +
             'ring-1 ring-inset ring-stone-200">Compare with before</button>'
           : '') +
+        (incident.photo_in_url
+          ? deletePhotoButton(incident.movement_id, 'in', !lost, 'Delete', 'panel')
+          : '') +
       '</div>' +
     '</div>';
   }
@@ -576,6 +592,58 @@
       restore();
     }
   };
+
+  /**
+   * Delete a photo outright — off the record, and into the Drive bin.
+   *
+   * Photos get taken by accident: a thumb over the lens, the wrong instrument,
+   * somebody's front room in the background. Retaking covers a bad photo of the
+   * right thing; this covers a photo that should not exist at all.
+   */
+  App.actions['photo-delete'] = async function (button) {
+    var movementId = button.dataset.value;
+    var kind = button.dataset.kind === 'out' ? 'out' : 'in';
+    var isDamage = button.dataset.damage === '1';
+
+    var yes = await UI.confirm(
+      'Delete this photo?',
+      isDamage
+        ? 'This is the only photo of the damage, and deleting it leaves no picture ' +
+          'of what happened. The record itself stays. The file goes to the Drive bin, ' +
+          'where it can be recovered for 30 days.'
+        : 'The file goes to the Drive bin, where it can be recovered for 30 days. ' +
+          'The rest of the record is not affected.',
+      'Delete photo', true);
+    if (!yes) return;
+
+    var restore = UI.busy(button, 'Deleting…');
+    try {
+      await Api.deletePhoto({ movement_id: movementId, kind: kind, confirm: true });
+      detailCache = { assetId: null, data: null };
+      UI.toast('Photo deleted', 'success');
+      await App.refresh({ showSpinner: false });
+    } catch (e) {
+      App.handleError(e);
+      restore();
+    }
+  };
+
+  /**
+   * The small "Delete" beside a photo that exists.
+   *
+   * `label` matters when a movement has both photos: two buttons both saying
+   * "Delete" is a coin toss, and the wrong one loses the damage evidence.
+   */
+  function deletePhotoButton(movementId, kind, isDamage, label, tone) {
+    return '<button type="button" data-action="photo-delete" ' +
+      'data-value="' + UI.esc(movementId) + '" data-kind="' + kind + '" ' +
+      'data-damage="' + (isDamage ? '1' : '0') + '" ' +
+      'class="rounded-lg px-2.5 py-1.5 text-xs font-medium ' +
+      (tone === 'panel'
+        ? 'bg-white text-red-700 ring-1 ring-inset ring-red-200'
+        : 'text-red-700 ring-1 ring-inset ring-red-200 hover:bg-red-50') + '">' +
+      '🗑 ' + UI.esc(label || 'Delete') + '</button>';
+  }
 
   var detailCache = { assetId: null, data: null };
 

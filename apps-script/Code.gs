@@ -21,7 +21,7 @@
  * Everything in this file is data. No SpreadsheetApp calls, no logic.
  */
 
-var APP_VERSION = '1.4.6';
+var APP_VERSION = '1.4.14';
 var TIMEZONE = 'Europe/London';
 
 /** Script Property keys. The access code lives here, NOT in the Sheet. */
@@ -1445,6 +1445,10 @@ function handleBootstrap() {
   return {
     today: today,
     version: APP_VERSION,
+    // Built from the remembered ID alone, with no Drive call at all — bootstrap
+    // is the one request the whole app depends on, and it must not start
+    // failing for everyone just because photos were never authorised.
+    photoFolderUrl: photoFolderUrl(),
     centres: table('Centres').all().map(publicCopy),
     instrumentTypes: table('InstrumentTypes').all().map(publicCopy),
     qualityGrades: table('QualityGrades').all().map(publicCopy),
@@ -2008,21 +2012,100 @@ function actionCancelAllocation(p) {
  * there is still nothing extra to pay for and nothing to expire.
  */
 
-/** The photos folder, made once and remembered. */
+/**
+ * Turns Apps Script's scope error into something the mandir can act on.
+ *
+ * Apps Script works out which permissions a script needs by reading the code,
+ * and it asks for them when a human runs it from the editor. Pasting in code
+ * that uses DriveApp for the first time and deploying a New version does NOT
+ * ask — so every photo upload throws "You do not have permission to call
+ * DriveApp..." and the volunteer sees a generic "something went wrong".
+ *
+ * The cure is for the owner to run authorizePhotos() once from the editor and
+ * accept the Google consent screen. Saying so beats a stack trace nobody sees.
+ */
+function isDrivePermissionError(err) {
+  var text = String((err && err.message) || err || '');
+  return text.indexOf('permission') !== -1 || text.indexOf('authoriz') !== -1 ||
+         text.indexOf('authoris') !== -1 || text.indexOf('auth/drive') !== -1;
+}
+
+function drivePermissionFailure(err) {
+  console.error('Drive refused: ' + ((err && err.stack) || err));
+  fail('DRIVE_NOT_AUTHORISED',
+    'Photos are not switched on yet. Whoever set this up needs to open the Apps Script ' +
+    'editor, run the function authorizePhotos once, and allow access to Google Drive. ' +
+    'Everything else in the app works normally in the meantime.');
+}
+
+/**
+ * Wherever the Google Sheet lives — that is where the photos go too.
+ *
+ * The obvious implementation, DriveApp.createFolder(name), drops the folder at
+ * the top of My Drive, mixed in with everything else the owner keeps there.
+ * Putting it beside the Sheet instead means the whole app is one tidy thing:
+ * move the Sheet into a folder and the photos follow it there.
+ *
+ * Returns null when the Sheet is loose at the top of My Drive, in which case
+ * the photos folder goes there too — still right next to it.
+ */
+function sheetParentFolder() {
+  var parents = DriveApp.getFileById(SpreadsheetApp.getActive().getId()).getParents();
+  return parents.hasNext() ? parents.next() : null;
+}
+
+/**
+ * A link to the photos folder, or '' if photos have never been used.
+ *
+ * Deliberately does NOT touch DriveApp: it only reads the ID we already stored,
+ * so it is safe to include in bootstrap, which every screen depends on.
+ */
+function photoFolderUrl() {
+  var id = PropertiesService.getScriptProperties().getProperty(PROP_PHOTO_FOLDER);
+  return id ? 'https://drive.google.com/drive/folders/' + id : '';
+}
+
+/**
+ * The photos folder, made once and remembered by ID.
+ *
+ * Remembering the ID rather than the name is what lets the mandir move or
+ * rename the folder afterwards without breaking anything — Drive keeps the ID
+ * for the life of the folder.
+ */
 function photoFolder() {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty(PROP_PHOTO_FOLDER);
 
   if (id) {
-    try { return DriveApp.getFolderById(id); } catch (gone) { /* recreate below */ }
+    try {
+      return DriveApp.getFolderById(id);
+    } catch (gone) {
+      // A deleted folder is recoverable — we just make another below. A refused
+      // scope is not, and must not be mistaken for one.
+      if (isDrivePermissionError(gone)) drivePermissionFailure(gone);
+    }
   }
 
-  // Reuse a folder of the right name if one already exists — re-running setup
-  // should not litter Drive with duplicates.
-  var existing = DriveApp.getFoldersByName(PHOTO_FOLDER_NAME);
-  var folder = existing.hasNext() ? existing.next() : DriveApp.createFolder(PHOTO_FOLDER_NAME);
-  props.setProperty(PROP_PHOTO_FOLDER, folder.getId());
-  return folder;
+  try {
+    var parent = sheetParentFolder();
+
+    // Look for an existing folder of the right name in that one place only.
+    // DriveApp.getFoldersByName searches the whole of Drive, which could just
+    // as easily return someone else's folder that happens to share the name.
+    var existing = parent ? parent.getFoldersByName(PHOTO_FOLDER_NAME)
+                          : DriveApp.getRootFolder().getFoldersByName(PHOTO_FOLDER_NAME);
+
+    var folder = existing.hasNext()
+      ? existing.next()
+      : (parent ? parent.createFolder(PHOTO_FOLDER_NAME)
+                : DriveApp.getRootFolder().createFolder(PHOTO_FOLDER_NAME));
+
+    props.setProperty(PROP_PHOTO_FOLDER, folder.getId());
+    return folder;
+  } catch (err) {
+    if (isDrivePermissionError(err)) drivePermissionFailure(err);
+    throw err;
+  }
 }
 
 /**
@@ -2050,8 +2133,15 @@ function actionUploadPhoto(p) {
   var extension = mimeType === 'image/png' ? 'png' : (mimeType === 'image/webp' ? 'webp' : 'jpg');
   var name = assetId + '-' + kind + '-' + stamp + '.' + extension;
 
-  var blob = Utilities.newBlob(Utilities.base64Decode(base64), mimeType, name);
-  var file = photoFolder().createFile(blob);
+  var file;
+  try {
+    var blob = Utilities.newBlob(Utilities.base64Decode(base64), mimeType, name);
+    file = photoFolder().createFile(blob);
+  } catch (err) {
+    if (err && err.name === 'ApiError') throw err;      // already explained
+    if (isDrivePermissionError(err)) drivePermissionFailure(err);
+    throw err;
+  }
 
   // Anyone with the link can view. The link is only ever shown inside the app,
   // which is already behind the access code, and without this the photo will
@@ -2070,6 +2160,99 @@ function actionUploadPhoto(p) {
     file_id: file.getId(),
     name: name
   };
+}
+
+/**
+ * Attach or replace the photo on a past movement.
+ *
+ * Retaking is deliberately allowed. The first photo is often taken in a hurry
+ * in a badly lit store room, and a better one of the same damage is strictly
+ * more useful. The old file stays in Drive — nothing is deleted, the row just
+ * stops pointing at it — so a replacement can never destroy evidence.
+ */
+function actionSetMovementPhoto(p) {
+  var movementId = requireField(p, 'movement_id');
+  var kind = p.kind === 'out' ? 'out' : 'in';
+  var url = String(p.photo_url || '').trim();
+
+  var movements = table('Movements');
+  var row = movements.findBy('movement_id', movementId);
+  if (!row) fail('NOT_FOUND', 'No record found with ID ' + movementId + '.');
+
+  // A damaged return is the one case where the photo may not simply be removed.
+  if (!url && kind === 'in' && row.outcome === 'damaged') {
+    fail('PHOTO_REQUIRED',
+      'This was returned damaged, so it has to keep a photo. Take a new one to replace it.');
+  }
+
+  var changes = {};
+  changes[kind === 'out' ? 'photo_out_url' : 'photo_in_url'] = url;
+  movements.update(row, changes);
+
+  flushAll();
+  return { movement_id: movementId, kind: kind, photo_url: url };
+}
+
+/**
+ * The Drive file ID inside a photo_url we wrote earlier.
+ *
+ * We only ever store the thumbnail form, but old rows or a hand-edited cell
+ * could hold a /file/d/ID/view link, so both are read.
+ */
+function photoFileId(url) {
+  var text = String(url || '');
+  var match = /[?&]id=([A-Za-z0-9_-]+)/.exec(text) ||
+              /\/file\/d\/([A-Za-z0-9_-]+)/.exec(text);
+  return match ? match[1] : '';
+}
+
+/**
+ * Removes a photo from a record, and puts the file in the Drive bin.
+ *
+ * Binned rather than destroyed: Drive keeps it for 30 days, so a photo deleted
+ * by mistake in a noisy store room is recoverable, while the app stops showing
+ * it immediately. Deleting the file is the point — unlinking alone would leave
+ * a picture of somebody's living room sitting in the mandir's Drive for ever.
+ *
+ * A damaged return needs `confirm: true`. That photo is the only evidence of
+ * what happened, so it should take a deliberate second tap, not a stray one.
+ */
+function actionDeletePhoto(p) {
+  var movementId = requireField(p, 'movement_id');
+  var kind = p.kind === 'out' ? 'out' : 'in';
+
+  var movements = table('Movements');
+  var row = movements.findBy('movement_id', movementId);
+  if (!row) fail('NOT_FOUND', 'No record found with ID ' + movementId + '.');
+
+  var field = kind === 'out' ? 'photo_out_url' : 'photo_in_url';
+  var url = row[field];
+  if (!url) fail('NOT_FOUND', 'There is no photo on that record to delete.');
+
+  if (kind === 'in' && row.outcome === 'damaged' && p.confirm !== true) {
+    fail('CONFIRM_REQUIRED',
+      'This is the only photo of the damage. Confirm that you want it deleted.');
+  }
+
+  var changes = {};
+  changes[field] = '';
+  movements.update(row, changes);
+  flushAll();
+
+  // The row is already clean, so a Drive failure here must not fail the call:
+  // the volunteer asked for the photo to go away, and it has.
+  var binned = false;
+  var fileId = photoFileId(url);
+  if (fileId) {
+    try {
+      DriveApp.getFileById(fileId).setTrashed(true);
+      binned = true;
+    } catch (err) {
+      console.warn('Could not bin photo ' + fileId + ': ' + err);
+    }
+  }
+
+  return { movement_id: movementId, kind: kind, deleted: true, binned: binned };
 }
 
 /* ================================================================
@@ -2616,6 +2799,8 @@ var WRITE_ACTIONS = {
   deleteEvent: actionDeleteEvent,
   bulkCheckinEvent: actionBulkCheckinEvent,
   uploadPhoto: actionUploadPhoto,
+  setMovementPhoto: actionSetMovementPhoto,
+  deletePhoto: actionDeletePhoto,
   saveSettings: actionSaveSettings
 };
 
@@ -2705,8 +2890,13 @@ function setupSheet() {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#fdf3e3');
     sheet.setFrozenRows(1);
-    if (sheet.getMaxColumns() > headers.length) {
-      sheet.deleteColumns(headers.length + 1, sheet.getMaxColumns() - headers.length);
+    // Trim the blank columns Google pads every new sheet with (26 of them),
+    // but NEVER past something someone has typed. If a volunteer adds their own
+    // column to the right of ours, getLastColumn() covers it and it survives —
+    // setupSheet runs on every redeploy and must not eat anybody's notes.
+    var keep = Math.max(headers.length, sheet.getLastColumn());
+    if (sheet.getMaxColumns() > keep) {
+      sheet.deleteColumns(keep + 1, sheet.getMaxColumns() - keep);
     }
     sheet.autoResizeColumns(1, headers.length);
   });
@@ -2740,6 +2930,78 @@ function setupSheet() {
   } catch (noUi) {
     // Running from a trigger or the editor with no UI attached — the log is enough.
   }
+  return message;
+}
+
+/* ================================================================
+ * TURNING PHOTOS ON
+ * ================================================================
+ * Run this ONCE from the Apps Script editor, the same way as setupSheet.
+ *
+ * Apps Script decides which permissions a script needs by reading its code,
+ * and it only asks for them when a person runs a function from the editor.
+ * Pasting in code that uses Drive and deploying a new version never triggers
+ * that prompt — so the web app has no right to touch Drive and every photo
+ * upload fails, while everything else keeps working perfectly. That mismatch
+ * is exactly what makes it confusing to diagnose.
+ *
+ * Running this makes Google show the consent screen. Accept it and photos work
+ * for everybody, on every device, immediately. There is nothing to redeploy.
+ */
+function authorizePhotos() {
+  var folder = photoFolder();     // the first real Drive call — this is what prompts
+
+  var message =
+    'Photos are switched on.\n\n' +
+    'They are saved in a folder called "' + folder.getName() + '",\n' +
+    'created right next to this spreadsheet in Google Drive:\n\n' +
+    folder.getUrl() + '\n\n' +
+    'You can move or rename that folder whenever you like — the app remembers it\n' +
+    'by its Drive ID, not by where it sits, so nothing breaks.\n\n' +
+    'Nothing needs redeploying — try taking a photo in the app now.';
+  console.log(message);
+
+  try {
+    SpreadsheetApp.getUi().alert(message);
+  } catch (noUi) {
+    // Editor with no UI attached; the log is enough.
+  }
+  return message;
+}
+
+/* ================================================================
+ * POINTING PHOTOS AT A DIFFERENT FOLDER
+ * ================================================================
+ * Only needed if you want the photos somewhere other than where they are —
+ * most usefully after moving this whole project to a different Google account.
+ *
+ * Paste the folder's address between the quotes and run it:
+ *
+ *   function myFolder() {
+ *     setPhotoFolder('https://drive.google.com/drive/folders/1AbC...');
+ *   }
+ *
+ * Existing photos are NOT moved. They keep working exactly where they are,
+ * because each one is remembered by its own link; this only changes where the
+ * NEXT photo is saved.
+ */
+function setPhotoFolder(folderUrlOrId) {
+  var text = String(folderUrlOrId || '').trim();
+  var match = /\/folders\/([A-Za-z0-9_-]+)/.exec(text);
+  var id = match ? match[1] : text;
+
+  if (!id) throw new Error('Give setPhotoFolder a Drive folder address or ID.');
+
+  // Fail here rather than at the next photo, when a volunteer is holding a
+  // damaged tabla and can do nothing about it.
+  var folder = DriveApp.getFolderById(id);
+
+  PropertiesService.getScriptProperties().setProperty(PROP_PHOTO_FOLDER, folder.getId());
+
+  var message = 'New photos will now be saved in "' + folder.getName() + '".\n' +
+                folder.getUrl() + '\n\n' +
+                'Photos taken before now are untouched and still work.';
+  console.log(message);
   return message;
 }
 

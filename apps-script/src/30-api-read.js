@@ -161,6 +161,10 @@ function handleBootstrap() {
   return {
     today: today,
     version: APP_VERSION,
+    // Built from the remembered ID alone, with no Drive call at all — bootstrap
+    // is the one request the whole app depends on, and it must not start
+    // failing for everyone just because photos were never authorised.
+    photoFolderUrl: photoFolderUrl(),
     centres: table('Centres').all().map(publicCopy),
     instrumentTypes: table('InstrumentTypes').all().map(publicCopy),
     qualityGrades: table('QualityGrades').all().map(publicCopy),

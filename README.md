@@ -15,6 +15,8 @@ expires, and nothing that needs reactivating.
 - [Sharing it with other karyakars](#sharing-it-with-other-karyakars)
 - [Changing the app after people are using it](#changing-the-app-after-people-are-using-it)
 - [Changing the access code](#changing-the-access-code)
+- [Where photos are stored](#where-photos-are-stored)
+- [Moving it to another Google account](#moving-the-whole-thing-to-another-google-account)
 - [Printing labels](#printing-labels)
 - [How sets work](#how-sets-work-tabla-kits-and-the-like)
 - [If something goes wrong](#if-something-goes-wrong)
@@ -49,9 +51,18 @@ karyakar turns up to collect, use **Give out** again and the booking is settled 
    damaged or that never came back. The hammer that went missing gets recorded against that set
    for good.
 
+> **Notes follow the instrument.** Anything written in an instrument's *Notes* — "scale changer,
+> handle with care", "left skin worn", "belongs to Ramesh" — appears next to it while you are
+> choosing what goes out, on the final check-and-confirm, and as a message on screen if you get
+> to it by scanning. Write it once in Instruments and it turns up at the moment somebody is
+> picking the thing up.
+
 ### Everything else
 
 - **Instruments** — the full inventory. Search, filter, edit, remove, add.
+- **Out on loan** — everything currently out, as a list you can print. Grouped by event, late
+  things first, with a box against each instrument to tick while you walk the store room. Reach it
+  from **More**, or by tapping the "*n* out" count on the home screen.
 - **Events** — mahotsavs and their sub-events, with what went where.
 - **More** — printing labels, the scanner, and settings.
 
@@ -289,6 +300,37 @@ Only needed if the *behaviour* changes — new fields, different validation, new
 > the old code, `config.js` still points at it, and it looks like your change simply did nothing.
 > Editing the existing deployment keeps the same URL, which is what everyone's app is pointing at.
 
+### Does redeploying wipe anything?
+
+**No.** Your instruments, loans and bookings live in the Google Sheet, and the photos live in a
+Drive folder beside it (see [Where photos are stored](#where-photos-are-stored)). The app is just
+code that reads and writes it. Replacing the code cannot touch the rows, the same way installing
+a new version of Excel doesn't empty your spreadsheets.
+
+Nothing restarts either — there is no server sitting there holding your data in memory. Each tap
+in the app is a separate request; the next one simply runs the new code.
+
+`setupSheet()` is safe to run as many times as you like. It only creates tabs that are missing,
+rewrites the header row, and adds sample rows to a tab that is **completely empty**. Once you have
+real instruments in there, the seeding is skipped entirely. There is a test that proves this: it
+creates a real instrument, a real loan and a real booking, runs `setupSheet()` twice, and checks
+the Sheet comes out identical.
+
+The things that *can* lose data are all separate from deploying:
+
+| Do this | And this happens |
+| --- | --- |
+| Run `clearDemoData()` or `seedDemoData()` | **Wipes** Items, Events, Bookings and loan history. Only ever use these before real use. |
+| Delete or rename a heading in row 1 of the Sheet | Breaks the app — columns are found by their heading text, not their position. |
+| Edit rows in the Sheet by hand while people are using the app | You can overwrite what someone just saved. Use the app where you can. |
+| Overwrite `config.js` with the version from GitHub | No data is lost, but the app forgets which Sheet it belongs to. Paste your `/exec` URL back in. |
+
+One small thing worth knowing: if a karyakar is halfway through a **Give out** or **Take back**
+when you deploy, the basket they have built up lives in their phone's memory until they press the
+final button. They are not interrupted mid-tap — but if they reload the page before finishing,
+that basket is gone and they start it again. Nothing that was already saved is affected. If you
+can, deploy when nobody is mid-handover.
+
 ### Getting changes back into GitHub
 
 If someone has been editing this project on a computer rather than in GitHub's web editor, the
@@ -332,6 +374,129 @@ Script editor:
 
 The code is deliberately kept there rather than in the Sheet, so that sharing the Sheet with
 someone does not hand them the code as well.
+
+---
+
+## Where photos are stored
+
+Photos are the only part of this app that is not in the Google Sheet — a spreadsheet cell cannot
+hold an image usefully, and storing them as text in the Sheet would slow down every screen for
+everybody.
+
+They go into **one folder, created right next to your Google Sheet in Drive**:
+
+```
+📁 (wherever your Sheet lives)
+   📄 Instrument Tracker          ← your Sheet
+   📁 Instrument Tracker Photos   ← every photo, and nothing else
+```
+
+Nothing is ever scattered around your Drive. If your Sheet is inside a folder called
+*Mandir Admin*, the photos folder is created inside *Mandir Admin* too. If your Sheet is loose at
+the top of My Drive, the folder appears there beside it — so if you would rather it were tucked
+away, put the Sheet in a folder first and the photos will follow.
+
+**You can move or rename that folder whenever you like.** The app remembers it by its Drive ID,
+not by its name or location, so filing it somewhere tidier will not break anything.
+
+To find it quickly, open **Settings** in the app — there is an "Open the photos folder" button.
+
+Each file is named after the instrument and the moment it was taken, so the folder stays readable
+on its own:
+
+```
+TAB-014-in-2026-08-10-142233.jpg
+HAR-003-out-2026-08-11-091502.jpg
+```
+
+`-in-` is a photo taken when something came back, `-out-` when it went out.
+
+### Who can see the photos
+
+Each photo is set to **"anyone with the link can view"**.
+
+This is deliberate and it is worth understanding. The volunteers using the app are not signed in
+to the mandir's Google account — they just have the web address and the access code. Without link
+sharing, a damage photo would show as a broken image for almost everyone.
+
+In practice this means the photos are unlisted rather than private: they do not appear in search
+and nobody can browse to them, but anyone who has the exact link can open one without signing in.
+The links are only ever shown inside the app, which is behind your access code.
+
+For photos of damaged tablas this is a sensible trade. If you would rather they were locked down
+to signed-in mandir accounts only — accepting that most volunteers would then see broken images —
+say so and it can be changed in one line.
+
+### Deleting a photo
+
+Wherever a photo appears in the app there is a **🗑 Delete** next to it — on the damage panel at
+the top of an instrument's page, and on each line of its history.
+
+Deleting does two things: the record stops showing the photo, and the file goes to the **Drive
+bin**, where Google keeps it for 30 days. So a photo deleted by mistake can be fetched back, but
+a photo of somebody's front room does not sit in the mandir's Drive for ever.
+
+Two things it deliberately does **not** do:
+
+- **It never deletes the record.** Delete the photo of a damaged tabla and the tabla is still
+  recorded as damaged, still has its note, and is still out of action. Only the picture goes.
+- **It asks twice for damage photos.** That photo is the only picture of what happened, so the
+  confirmation says so plainly rather than treating it like any other tap.
+
+If you would rather replace a photo than remove it, use **Retake** instead — that keeps the old
+file in Drive and simply points the record at the new one.
+
+Nothing is deleted automatically. If the folder gets large after a few years you can also tidy it
+straight from Drive; the app carries on working and shows a broken thumbnail on those old
+records. Deleting the whole folder is safe too — the app makes a new one next time somebody takes
+a photo.
+
+---
+
+## Moving the whole thing to another Google account
+
+Yes, this can be done at any time, and it is worth knowing how before you need it — for example
+if the app was set up on someone's personal account and should live on a mandir one.
+
+**Transfer ownership. Do not copy.** This is the whole trick. Transferring keeps Google's internal
+IDs identical, so every photo already recorded keeps working. Copying creates new files with new
+IDs, and every photo in the app's history becomes a broken image.
+
+There are three pieces, and the GitHub side is not one of them:
+
+| Piece | What to do |
+| --- | --- |
+| The Google Sheet (all your data) | In Drive, right-click → **Share** → add the new account → set it to **Owner**. The Apps Script goes with it automatically; it lives inside the Sheet. |
+| The **Instrument Tracker Photos** folder | Same again: **Share** → new account → **Owner**. Do this even though it feels optional — otherwise the photos still belong to the old account and vanish if that account is ever closed. |
+| The GitHub Pages site | Nothing to do. It is not a Google thing and is unaffected. |
+
+Then, signed in as the **new** account:
+
+1. Open the Sheet → **Extensions → Apps Script**.
+2. **Run `setupSheet`** and accept the permission screen. (It changes no data — see
+   [Does redeploying wipe anything?](#does-redeploying-wipe-anything))
+3. **Run `authorizePhotos`** and accept that permission screen too.
+4. **Deploy → New deployment → Web app**, *Execute as: Me*, *Who has access: Anyone*. Copy the
+   new `/exec` URL.
+5. In GitHub, edit **`config.js`** and paste the new URL in. Commit.
+
+The web address everyone uses does not change, so nobody needs a new link.
+
+> **Check before you close the old account.** Open the app, find an instrument with a damage
+> photo, and make sure the photo still loads. If it does, the transfer is complete. Photos are
+> the one part that can be left behind, because they are the one part that is not in the Sheet.
+
+If the photos ever do end up in a different folder — you moved them by hand, or copied rather
+than transferred — you can point the app at the new folder without redeploying. In the Apps
+Script editor, add this function, paste your folder's address in, and run it once:
+
+```js
+function myFolder() {
+  setPhotoFolder('https://drive.google.com/drive/folders/PASTE_FOLDER_ADDRESS');
+}
+```
+
+That only changes where the **next** photo is saved. Photos already taken are untouched.
 
 ---
 
@@ -506,6 +671,34 @@ If you got the JSON, check `config.js`:
 
 Nothing is ever half-saved when this happens: either a whole check-out goes through or none of
 it does.
+
+### Taking a photo says "something went wrong at our end"
+
+Everything else works, but the moment you try to take a photo it fails. This is almost always
+that **the script has never been given permission to use Google Drive**, where the photos are
+saved.
+
+Google decides what a script is allowed to do by reading its code, and it only asks your
+permission when *a person* runs a function from the editor. Pasting in new code and deploying a
+new version never asks. So the app can happily use your Sheet — it was allowed to do that long
+ago — but is refused the moment it reaches for Drive.
+
+**The fix takes about twenty seconds and there is nothing to redeploy:**
+
+1. Open your Google Sheet → **Extensions → Apps Script**.
+2. In the toolbar there is a dropdown listing the functions. Choose **`authorizePhotos`**
+   (on older code that function does not exist yet — choose **`photoFolder`** instead; it does
+   exactly the same job).
+3. Click **▶ Run**.
+4. Google shows a permission screen. Click **Review permissions**, pick your account, click
+   **Advanced → Go to Instrument Tracker (unsafe)** if it warns you — it says that about every
+   script that has not been through Google's paid review, including your own — then **Allow**.
+5. You should see "Photos are switched on."
+
+Go back to the app and take the photo again. It will work, for everybody, straight away.
+
+You only ever do this once. If it happens again after a future update, it means the new code
+needs a permission it did not need before — same fix.
 
 ### The camera does not start
 

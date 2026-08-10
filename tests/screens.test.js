@@ -37,7 +37,12 @@ var fixtures = (function () {
     byEvent[e.event_id] = call('event', { event_id: e.event_id });
   });
 
-  return { bootstrap: call('bootstrap'), events: byEvent };
+  var byItem = {};
+  call('bootstrap').items.forEach(function (i) {
+    byItem[i.asset_id] = call('item', { asset_id: i.asset_id });
+  });
+
+  return { bootstrap: call('bootstrap'), events: byEvent, items: byItem };
 })();
 var bootstrapPayload = fixtures.bootstrap;
 
@@ -56,6 +61,9 @@ async function app() {
   sandbox.Api.event = function (id) {
     return Promise.resolve(fixtures.events[id]);
   };
+  sandbox.Api.item = function (id) {
+    return Promise.resolve(fixtures.items[id]);
+  };
   return sandbox;
 }
 
@@ -69,6 +77,30 @@ async function renderEventBody(s, eventId) {
   s.App.screens.event([eventId]);                 // first pass: header + spinner
   await s.__realEventMount([eventId]);            // fetches and caches the detail
   return render(s, 'event', [eventId]);           // second pass: the real body
+}
+
+/**
+ * Draws an item page for real. Like the event page, rendering without running
+ * its mount only ever produces the spinner — so the damage panel and the
+ * movement history, which is where the photo controls live, would never be
+ * exercised at all.
+ */
+async function renderItemBody(s, assetId) {
+  s.location.hash = '#/item/' + assetId;
+  s.App.screens.item([assetId]);
+  await s.__realItemMount([assetId]);
+  return render(s, 'item', [assetId]);
+}
+
+/**
+ * A separate browser app whose bootstrap differs from the shared one. Used
+ * where a test needs to vary the payload without disturbing the cached app
+ * every other test in this file renders against.
+ */
+async function withBootstrap(overrides) {
+  var s = DOM.loadBrowserApp(Object.assign({}, bootstrapPayload, overrides));
+  await s.App.refresh({ showSpinner: false });
+  return s;
 }
 
 /** Renders one screen and returns its HTML, failing loudly if it throws. */
@@ -107,6 +139,7 @@ var SCREENS = [
   ['events', []],
   ['event', ['EV-001']],
   ['labels', []],
+  ['onloan', []],
   ['settings', []],
   ['add', []],
   ['edit', ['HAR-001']],
@@ -217,6 +250,25 @@ module.exports = async function () {
         ok(html.indexOf(t) !== -1, 'settings mentions ' + t);
       });
     });
+
+    test('settings says where photos are kept, and links to the folder', async function () {
+      var s = await withBootstrap({
+        photoFolderUrl: 'https://drive.google.com/drive/folders/folder-9' });
+      var html = render(s, 'settings');
+
+      ok(html.indexOf('Where photos are kept') !== -1);
+      ok(html.indexOf('https://drive.google.com/drive/folders/folder-9') !== -1,
+         'the folder must be one tap away, not something to hunt for in Drive');
+    });
+
+    test('settings does not offer a dead link before any photo exists', async function () {
+      var s = await withBootstrap({ photoFolderUrl: '' });
+      var html = render(s, 'settings');
+
+      ok(html.indexOf('No photos have been saved yet') !== -1);
+      ok(html.indexOf('drive.google.com/drive/folders') === -1,
+         'a link to a folder that does not exist is worse than no link');
+    });
   });
 
   suite('Event pages render their body, not just the spinner', function () {
@@ -252,5 +304,187 @@ module.exports = async function () {
           ok(html.length > 50, name + ' rendered almost nothing');
         });
       });
+  });
+
+  suite('Item pages draw their real body, not just the spinner', function () {
+
+    test('a damaged instrument shows the damage panel and its photo', async function () {
+      var html = await renderItemBody(full, 'HAR-007');
+      ok(html.indexOf('Damaged') !== -1, 'the damage panel is drawn');
+      ok(html.indexOf('Bellows leaking') !== -1, 'the note is shown');
+    });
+
+    /**
+     * Everything before <div id="item-history"> — i.e. the damage panel only.
+     *
+     * Asserting against the whole page was useless here: the history rows carry
+     * their own delete buttons, so a test for "a delete button exists" passed
+     * happily with the panel's button deleted. Scope is the whole point.
+     */
+    function damagePanelOf(html) {
+      var end = html.indexOf('id="item-history"');
+      ok(end !== -1, 'the history section marks where the panel ends');
+      return html.slice(0, end);
+    }
+
+    test('the damage panel itself offers to delete the photo', async function () {
+      var panel = damagePanelOf(await renderItemBody(full, 'HAR-007'));
+      ok(panel.indexOf('data-action="photo-delete"') !== -1,
+         'the delete must be on the panel, where the photo actually is');
+      ok(panel.indexOf('data-damage="1"') !== -1,
+         'and flagged as damage so the confirm warns properly');
+    });
+
+    test('the history rows offer to delete their photos too', async function () {
+      var html = await renderItemBody(full, 'HAR-007');
+      var history = html.slice(html.indexOf('id="item-history"'));
+      ok(history.indexOf('data-action="photo-delete"') !== -1);
+    });
+
+    test('nothing offers to delete a photo that is not there', async function () {
+      var html = await renderItemBody(full, 'TAB-001');
+      var hasPhoto = html.indexOf('drive.google.com/thumbnail') !== -1;
+      if (!hasPhoto) {
+        ok(html.indexOf('data-action="photo-delete"') === -1,
+           'a delete button with no photo behind it is a dead end');
+      }
+    });
+  });
+
+  /**
+   * A note written on an instrument in the inventory is worth nothing if it
+   * only ever appears in the inventory. The moment it matters is the moment
+   * somebody is picking the instrument up, so it has to survive the whole
+   * Give out flow.
+   */
+  suite('An instrument\'s note follows it into Give out', function () {
+
+    /** Puts the Give out flow into step 2 with real dates set. */
+    function atItemStep(s) {
+      s.location.hash = '#/give';
+      var g = s.App.screens.give.state();
+      ok(g, 'the give flow exposes its basket');
+      g.step = 2;
+      g.when = 'now';
+      g.event_id = 'EV-001';
+      g.from = '2026-08-08';
+      g.to = '2026-08-20';
+      g.name = 'Nilesh';
+      return g;
+    }
+
+    /** The picker list, which draws itself into #give-list rather than being returned. */
+    function pickerList(s) {
+      render(s, 'give');
+      s.App.screens.give.renderList();
+      return s.document.getElementById('give-list').innerHTML;
+    }
+
+    test('the note shows against the instrument when choosing what goes out', function () {
+      var s = full;
+      atItemStep(s);
+      var html = pickerList(s);
+
+      ok(html.indexOf('Scale changer — handle with care') !== -1,
+         'HAR-002\'s note must appear in the picker');
+    });
+
+    test('the picker lists instruments at all', function () {
+      // This list had never been rendered by a test. Anything that threw in
+      // here reached a volunteer as an empty screen with a working footer.
+      var s = full;
+      atItemStep(s);
+      var html = pickerList(s);
+
+      ok(html.indexOf('HAR-002') !== -1, 'a free harmonium is offered');
+      ok(html.length > 500, 'the list has real content, not just a wrapper');
+    });
+
+    test('the note is still there on the final check-and-confirm', function () {
+      var s = full;
+      var g = atItemStep(s);
+      g.step = 3;
+      g.chosen = { 'HAR-002': true };
+
+      var html = render(s, 'give');
+      ok(html.indexOf('Scale changer — handle with care') !== -1,
+         'the last screen before handing over is the last chance to read it');
+
+      g.chosen = {};
+      g.step = 1;
+    });
+
+    test('an instrument with no note adds no empty banner', function () {
+      var s = full;
+      var g = atItemStep(s);
+      g.step = 3;
+      g.chosen = { 'HAR-001': true };
+
+      var plain = s.App.itemById('HAR-001');
+      eq(String(plain.notes || '').trim(), '', 'HAR-001 is the no-note case');
+      ok(render(s, 'give').indexOf('📌') === -1, 'no pin where there is nothing to say');
+
+      g.chosen = {};
+      g.step = 1;
+    });
+  });
+
+  suite('The on-loan list can be printed', function () {
+
+    test('it lists every instrument that is actually out', function () {
+      var html = render(full, 'onloan');
+      var out = full.App.itemsOut();
+      ok(out.length > 0, 'the fixture has instruments out');
+
+      out.forEach(function (item) {
+        ok(html.indexOf(item.asset_id) !== -1,
+           item.asset_id + ' is out but missing from the printed list');
+      });
+    });
+
+    test('it lists nothing that is not out', function () {
+      var html = render(full, 'onloan');
+      var inStore = full.App.activeItems().filter(function (i) {
+        return i.status === 'available';
+      });
+      ok(inStore.length > 0);
+
+      // A list you take to the store room must not send you looking for
+      // something that is sitting on the shelf behind you.
+      var wrongly = inStore.filter(function (i) {
+        return html.indexOf('>' + i.asset_id + '<') !== -1;
+      });
+      eq(wrongly.length, 0,
+         'these are in the store but printed as out: ' +
+         wrongly.map(function (i) { return i.asset_id; }).join(', '));
+    });
+
+    test('late items are marked, and come first', function () {
+      var html = render(full, 'onloan');
+      var late = full.App.overdueItems();
+      ok(late.length > 0, 'the fixture has late items');
+      ok(html.indexOf('late back') !== -1, 'the header counts them');
+    });
+
+    test('every row has a box to tick', function () {
+      var html = render(full, 'onloan');
+      var boxes = html.split('class="tickbox"').length - 1;
+      eq(boxes, full.App.itemsOut().length,
+         'one tick box per instrument — that is what the paper is for');
+    });
+
+    test('the screen chrome is kept off the paper', function () {
+      var html = render(full, 'onloan');
+      ok(html.indexOf('class="no-print"') !== -1,
+         'the buttons and page title must not print');
+      ok(html.indexOf('loan-sheet') !== -1,
+         'the printed part carries the page geometry');
+    });
+
+    test('it says so plainly when nothing is out', function () {
+      var html = render(empty, 'onloan');
+      ok(html.indexOf('Nothing is out') !== -1);
+      ok(html.indexOf('tickbox') === -1, 'no empty table to print');
+    });
   });
 };

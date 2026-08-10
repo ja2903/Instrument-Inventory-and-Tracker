@@ -141,6 +141,7 @@ function loadBrowserApp(bootstrap) {
    * kept, and the test stubs Api.event to feed it.
    */
   sandbox.__realEventMount = sandbox.App.screens.event.mount;
+  sandbox.__realItemMount = sandbox.App.screens.item.mount;   // same trap, same fix
   Object.keys(sandbox.App.screens).forEach(function (name) {
     if (typeof sandbox.App.screens[name].mount === 'function') {
       sandbox.App.screens[name].mount = function () {};

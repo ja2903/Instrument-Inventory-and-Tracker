@@ -28,6 +28,10 @@ function formatDate(date, tz, pattern) {
   if (pattern === 'yyyy-MM-dd') {
     return parts.year + '-' + parts.month + '-' + parts.day;
   }
+  if (pattern === 'yyyy-MM-dd-HHmmss') {
+    return parts.year + '-' + parts.month + '-' + parts.day + '-' +
+           (parts.hour === '24' ? '00' : parts.hour) + parts.minute + parts.second;
+  }
   if (pattern === "yyyy-MM-dd'T'HH:mm:ssXXX") {
     // Offset in ±HH:MM, derived by comparing the zoned wall time against UTC.
     var asUTC = Date.UTC(+parts.year, +parts.month - 1, +parts.day,
@@ -90,6 +94,10 @@ FakeSheet.prototype.read = function (r, c) {
 };
 FakeSheet.prototype.write = function (r, c, v) {
   this.grid[r + ',' + c] = v === undefined || v === null ? '' : v;
+  // Real Sheets grows the grid when you add a column, and getMaxColumns
+  // reports the new width. Without this the mock silently under-reported and
+  // hid a destructive branch in setupSheet.
+  if (c > this.maxColumns) this.maxColumns = c;
 };
 FakeSheet.prototype.getLastRow = function () {
   var last = 0;
@@ -145,6 +153,7 @@ function FakeSpreadsheet() {
   this.sheets = [new FakeSheet('Sheet1')];
   this.timezone = 'Etc/GMT';
 }
+FakeSpreadsheet.prototype.getId = function () { return 'sheet-id'; };
 FakeSpreadsheet.prototype.getSheetByName = function (name) {
   return this.sheets.filter(function (s) { return s.name === name; })[0] || null;
 };
@@ -159,6 +168,149 @@ FakeSpreadsheet.prototype.deleteSheet = function (sheet) {
 FakeSpreadsheet.prototype.getSheets = function () { return this.sheets.slice(); };
 FakeSpreadsheet.prototype.setSpreadsheetTimeZone = function (tz) { this.timezone = tz; };
 
+/* ---------------- drive ------------------------------------------ */
+
+/**
+ * Enough of DriveApp to run the photo upload path for real.
+ *
+ * `denied` reproduces the failure that actually bit us in production: an Apps
+ * Script project authorised before the code used DriveApp throws on the very
+ * first Drive call until the owner re-consents. Redeploying does not do that,
+ * so the web app keeps failing with a scope error no volunteer can act on.
+ */
+function FakeDrive(opts) {
+  opts = opts || {};
+  this.denied = !!opts.denied;
+  this.folders = [];
+  this.files = [];
+  this.nextId = 1;
+}
+FakeDrive.prototype._guard = function (name) {
+  if (!this.denied) return;
+  var e = new Error(
+    'Exception: You do not have permission to call ' + name +
+    '. Required permissions: https://www.googleapis.com/auth/drive');
+  throw e;
+};
+FakeDrive.prototype._file = function (blob, folder) {
+  var drive = this;
+  var id = 'file-' + (this.nextId++);
+  var file = {
+    id: id,
+    blob: blob,
+    folder: folder,
+    sharing: null,
+    trashed: false,
+    getId: function () { return id; },
+    getName: function () { return blob.name; },
+    getBlob: function () { return blob; },
+    setTrashed: function (yes) {
+      drive._guard('DriveApp.File.setTrashed');
+      file.trashed = !!yes;
+      return file;
+    },
+    setSharing: function (access, permission) {
+      drive._guard('DriveApp.File.setSharing');
+      if (drive.sharingRefused) throw new Error('Sharing is disabled for this domain.');
+      file.sharing = access + '/' + permission;
+      return file;
+    }
+  };
+  this.files.push(file);
+  return file;
+};
+function iterator(list) {
+  var i = 0;
+  return { hasNext: function () { return i < list.length; },
+           next: function () { return list[i++]; } };
+}
+
+/**
+ * `parentId` is null for the top of My Drive. The mock models containment
+ * properly because where the photos folder ends up is the whole point — a
+ * folder dumped at the root of someone's Drive is a real complaint.
+ */
+FakeDrive.prototype.makeFolder = function (name, parentId) {
+  var drive = this;
+  var id = 'folder-' + (this.nextId++);
+  var folder = {
+    id: id,
+    name: name,
+    parentId: parentId === undefined ? null : parentId,
+    getId: function () { return id; },
+    getName: function () { return name; },
+    getUrl: function () { return 'https://drive.google.com/drive/folders/' + id; },
+    createFile: function (blob) {
+      drive._guard('DriveApp.Folder.createFile');
+      return drive._file(blob, folder);
+    },
+    createFolder: function (childName) {
+      drive._guard('DriveApp.Folder.createFolder');
+      return drive.makeFolder(childName, id);
+    },
+    getFoldersByName: function (childName) {
+      drive._guard('DriveApp.Folder.getFoldersByName');
+      return iterator(drive.folders.filter(function (f) {
+        return f.parentId === id && f.name === childName;
+      }));
+    }
+  };
+  this.folders.push(folder);
+  return folder;
+};
+
+FakeDrive.prototype.api = function () {
+  var drive = this;
+
+  // The spreadsheet is a Drive file like any other, and by default it sits
+  // loose at the top of My Drive — which is how a real new install starts.
+  drive.root = drive.makeFolder('My Drive', undefined);
+  drive.root.parentId = null;
+  drive.sheetParentId = null;
+
+  return {
+    Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK', PRIVATE: 'PRIVATE' },
+    Permission: { VIEW: 'VIEW', EDIT: 'EDIT' },
+    getRootFolder: function () {
+      drive._guard('DriveApp.getRootFolder');
+      return drive.root;
+    },
+    getFileById: function (id) {
+      drive._guard('DriveApp.getFileById');
+
+      // The spreadsheet itself, asked for so we can find the folder it is in.
+      if (id === 'sheet-id') {
+        return {
+          getParents: function () {
+            var parent = drive.folders.filter(function (f) {
+              return f.id === drive.sheetParentId;
+            })[0];
+            return iterator(parent ? [parent] : []);
+          }
+        };
+      }
+
+      var hit = drive.files.filter(function (f) { return f.id === id; })[0];
+      if (!hit) throw new Error('No file with id ' + id);
+      return hit;
+    },
+    getFolderById: function (id) {
+      drive._guard('DriveApp.getFolderById');
+      var hit = drive.folders.filter(function (f) { return f.id === id; })[0];
+      if (!hit) throw new Error('No folder with id ' + id);
+      return hit;
+    },
+    getFoldersByName: function (name) {
+      drive._guard('DriveApp.getFoldersByName');
+      return iterator(drive.folders.filter(function (f) { return f.name === name; }));
+    },
+    createFolder: function (name) {
+      drive._guard('DriveApp.createFolder');
+      return drive.makeFolder(name, null);
+    }
+  };
+};
+
 /* ---------------- the sandbox ------------------------------------ */
 
 /**
@@ -168,6 +320,7 @@ FakeSpreadsheet.prototype.setSpreadsheetTimeZone = function (tz) { this.timezone
 function loadApp(opts) {
   opts = opts || {};
   var spreadsheet = new FakeSpreadsheet();
+  var drive = new FakeDrive({ denied: opts.driveDenied });
   var properties = {};
   var logs = [];
   var fixedNow = opts.now ? new Date(opts.now).getTime() : null;
@@ -192,8 +345,12 @@ function loadApp(opts) {
 
     console: {
       log: function (m) { logs.push(String(m)); },
+      info: function (m) { logs.push('INFO: ' + String(m)); },
+      warn: function (m) { logs.push('WARN: ' + String(m)); },
       error: function (m) { logs.push('ERROR: ' + String(m)); }
     },
+
+    DriveApp: drive.api(),
 
     SpreadsheetApp: {
       getActive: function () { return spreadsheet; },
@@ -201,7 +358,20 @@ function loadApp(opts) {
     },
 
     Utilities: {
-      formatDate: function (date, tz, pattern) { return formatDate(date, tz, pattern); }
+      formatDate: function (date, tz, pattern) { return formatDate(date, tz, pattern); },
+      base64Decode: function (b64) {
+        // Apps Script hands back a byte array; Buffer is close enough for the
+        // one thing the app does with it, which is wrap it in a blob.
+        return Array.prototype.slice.call(Buffer.from(String(b64), 'base64'));
+      },
+      newBlob: function (bytes, mimeType, name) {
+        return {
+          bytes: bytes, mimeType: mimeType, name: name,
+          getBytes: function () { return bytes; },
+          getName: function () { return name; },
+          getContentType: function () { return mimeType; }
+        };
+      }
     },
 
     PropertiesService: {
@@ -253,6 +423,7 @@ function loadApp(opts) {
   return {
     sandbox: sandbox,
     spreadsheet: spreadsheet,
+    drive: drive,
     properties: properties,
     logs: logs,
     get: get,

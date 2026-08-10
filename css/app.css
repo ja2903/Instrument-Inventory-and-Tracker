@@ -128,6 +128,21 @@ details[open] > summary .chevron { transform: rotate(180deg); }
 
 @page { size: A4 portrait; margin: 0; }
 
+/*
+ * The loan list is the one thing here that is a document rather than a sheet
+ * of stickers, so it needs real page margins. Labels must keep margin: 0 —
+ * their grid offsets (15.1mm / 7.2mm) are measured from the paper edge, and a
+ * page margin would shift every sticker off its backing.
+ *
+ * Hence a named page rather than changing the default. Where a browser does
+ * not support named pages the list still prints correctly, just closer to the
+ * edge; .loan-sheet's own padding keeps the first page readable regardless.
+ */
+@page loans { size: A4 portrait; margin: 14mm 12mm; }
+
+/* Hidden on screen, printed on paper — the reverse of .no-print. */
+.print-only { display: none; }
+
 @media print {
   body { background: #fff !important; }
 
@@ -135,6 +150,57 @@ details[open] > summary .chevron { transform: rotate(180deg); }
   .no-print { display: none !important; }
 
   main { padding: 0 !important; max-width: none !important; }
+
+  .print-only { display: block !important; }
+
+  /* ---- the "out on loan" list ---------------------------------- *
+   * A document, not a label sheet. Black on white, no rounded cards,
+   * and every group kept whole where it will fit on one page.
+   */
+  .loan-sheet {
+    page: loans;
+    padding: 10mm 8mm;          /* survives even if named pages are ignored */
+    color: #000;
+    font-size: 10pt;
+  }
+
+  .loan-group {
+    break-inside: auto;          /* a long event may span pages */
+    page-break-inside: auto;
+  }
+
+  .loan-group h2 {
+    break-after: avoid;          /* never strand a heading at the foot */
+    page-break-after: avoid;
+    font-size: 11pt;
+  }
+
+  .loan-table { width: 100%; border-collapse: collapse; }
+
+  /* Repeat the column headings at the top of every page, so page 3 of a
+     stocktake is still readable on its own. */
+  .loan-table thead { display: table-header-group; }
+  .loan-table tr { break-inside: avoid; page-break-inside: avoid; }
+
+  .loan-table th,
+  .loan-table td {
+    border-bottom: 0.2mm solid #999;
+    padding: 1.6mm 2mm 1.6mm 0;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .loan-table th { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.04em; }
+
+  /* An empty box to tick while walking the store room — the reason anyone
+     prints this instead of reading it off a phone. */
+  .tickbox {
+    display: inline-block;
+    width: 4mm;
+    height: 4mm;
+    border: 0.3mm solid #333;
+    border-radius: 0.5mm;
+  }
 
   /* ---- default: Avery L7160 / J8160 ---- */
   .label-sheet {

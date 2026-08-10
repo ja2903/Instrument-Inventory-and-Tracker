@@ -609,6 +609,133 @@
     '</a>';
   }
 
+  /* ================================================================
+   * What is on loan, as a sheet of paper
+   * ================================================================
+   *
+   * The app is the record; this is for the situations where a screen is not
+   * enough — walking the store room counting what is missing, handing a list
+   * to someone driving to Paris, or putting a copy in the file after a
+   * mahotsav. So it is deliberately a plain table with a tick column, not a
+   * prettier version of the dashboard.
+   */
+
+  /** One row per instrument out, flattened and sorted the way you read it. */
+  function loanRows() {
+    return App.itemsOut().map(function (item) {
+      var live = item.live || {};
+      return {
+        item: item,
+        name: item.name,
+        asset_id: item.asset_id,
+        event: [live.event_name, live.sub_event_name].filter(Boolean).join(' / ') || 'No event',
+        centre: live.centre || '',
+        who: live.checked_out_by || '',
+        due: live.expected_return_date || '',
+        late: live.days_overdue || 0,
+        via: live.via_parent_asset_id || ''
+      };
+    }).sort(function (a, b) {
+      // Late first, then by when it is due, then by name — the order you would
+      // work down the page chasing things.
+      if ((b.late > 0) !== (a.late > 0)) return b.late - a.late;
+      if (a.due !== b.due) return (a.due || '9999').localeCompare(b.due || '9999');
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  App.screens.onloan = function () {
+    var rows = loanRows();
+    var late = rows.filter(function (r) { return r.late > 0; }).length;
+
+    if (!rows.length) {
+      return UI.pageTitle('Out on loan', 'Everything is in the store.') +
+        UI.emptyState('📦', 'Nothing is out',
+          'When instruments are given out they will be listed here, ready to print.',
+          UI.button('Give out instruments', { href: '#/give' }));
+    }
+
+    // Grouped by event, because that is how anything gets chased or returned.
+    var byEvent = {};
+    rows.forEach(function (r) {
+      if (!byEvent[r.event]) byEvent[r.event] = [];
+      byEvent[r.event].push(r);
+    });
+    var events = Object.keys(byEvent).sort();
+
+    var tables = events.map(function (name) {
+      return '<section class="loan-group mb-6">' +
+        '<h2 class="mb-2 text-sm font-semibold text-stone-900">' + UI.esc(name) +
+          ' <span class="font-normal text-stone-500">· ' +
+          UI.plural(byEvent[name].length, 'instrument') + '</span></h2>' +
+
+        '<table class="loan-table w-full border-collapse text-sm">' +
+          '<thead>' +
+            '<tr class="border-b border-stone-300 text-left text-xs uppercase ' +
+              'tracking-wide text-stone-500">' +
+              '<th class="w-8 py-1.5 pr-2">✓</th>' +
+              '<th class="py-1.5 pr-2">Instrument</th>' +
+              '<th class="py-1.5 pr-2">ID</th>' +
+              '<th class="py-1.5 pr-2">Centre</th>' +
+              '<th class="py-1.5 pr-2">Responsible</th>' +
+              '<th class="py-1.5 pr-2">Back by</th>' +
+            '</tr>' +
+          '</thead>' +
+          '<tbody>' +
+            byEvent[name].map(function (r) {
+              return '<tr class="border-b border-stone-100 align-top">' +
+                '<td class="py-1.5 pr-2"><span class="tickbox"></span></td>' +
+                '<td class="py-1.5 pr-2 font-medium text-stone-900">' + UI.esc(r.name) +
+                  (r.via ? ' <span class="text-xs text-stone-500">(with ' +
+                    UI.esc(r.via) + ')</span>' : '') + '</td>' +
+                '<td class="py-1.5 pr-2 font-mono text-xs text-stone-500">' +
+                  UI.esc(r.asset_id) + '</td>' +
+                '<td class="py-1.5 pr-2 text-stone-600">' + UI.esc(r.centre || '—') + '</td>' +
+                '<td class="py-1.5 pr-2 text-stone-600">' + UI.esc(r.who || '—') + '</td>' +
+                '<td class="py-1.5 pr-2 ' +
+                  (r.late > 0 ? 'font-semibold text-red-700' : 'text-stone-600') + '">' +
+                  UI.esc(UI.dayMonth(r.due) || '—') +
+                  (r.late > 0 ? ' · ' + UI.esc(UI.daysLate(r.late)) : '') + '</td>' +
+              '</tr>';
+            }).join('') +
+          '</tbody>' +
+        '</table>' +
+      '</section>';
+    }).join('');
+
+    return '<div class="no-print">' +
+        UI.pageTitle('Out on loan',
+          UI.plural(rows.length, 'instrument') + ' out across ' +
+          UI.plural(events.length, 'event') +
+          (late ? ' · ' + late + ' late back' : '')) +
+        '<div class="mb-5 flex flex-wrap gap-2">' +
+          UI.button('🖨 Print this list', { action: 'onloan-print' }) +
+          UI.button('Back to home', { href: '#/', variant: 'secondary' }) +
+        '</div>' +
+      '</div>' +
+
+      // Everything below is what actually lands on paper. The wrapper carries
+      // the named page and the fallback padding — see css/app.css.
+      '<div class="loan-sheet">' +
+
+        // Hidden on screen: the page title above already says all of it.
+        '<div class="print-only mb-4">' +
+          '<h1 class="text-lg font-bold">Instruments on loan</h1>' +
+          '<p class="text-xs">' + UI.esc(UI.fullDate(App.data.today)) + ' · ' +
+            UI.plural(rows.length, 'instrument') + ' out' +
+            (late ? ' · ' + late + ' late back' : '') + '</p>' +
+        '</div>' +
+
+        tables +
+
+        '<p class="print-only mt-4 text-xs">' +
+          'Printed from Instrument Tracker. The app is the record — mark this sheet up, ' +
+          'then put the returns through Take back.</p>' +
+      '</div>';
+  };
+
+  App.actions['onloan-print'] = function () { window.print(); };
+
   App.screens.dashboard = function () {
     var items = App.activeItems();
     var out = App.itemsOut();
@@ -662,7 +789,10 @@
       '<p class="mb-5 px-1 text-sm text-stone-500">' +
         '<a href="#/inventory" class="font-semibold text-stone-700 underline-offset-2 ' +
           'hover:underline">' + available + ' in the store</a>' +
-        ' · ' + out.length + ' out' +
+        ' · ' + (out.length
+          ? '<a href="#/onloan" class="underline-offset-2 hover:underline">' +
+            out.length + ' out</a>'
+          : '0 out') +
         (booked ? ' · ' + booked + ' booked ahead' : '') +
         (maintenance
           ? ' · <a href="#/inventory" data-action="show-maintenance" ' +
@@ -1038,6 +1168,25 @@
     return giveStepWhen();
   };
 
+  /*
+   * The basket, reachable from outside.
+   *
+   * The flow keeps its state in a closure, which is right — nothing else
+   * should be writing to it. But that also made the middle of the flow
+   * untestable: every screen test could only ever render step 1. This is the
+   * one seam, deliberately read/write and deliberately named, so a test can
+   * put the flow at step 2 or 3 and check what a volunteer would actually see.
+   */
+  App.screens.give.state = giveState;
+
+  /*
+   * The instrument picker draws itself into #give-list rather than being
+   * returned by the screen, so rendering the screen alone only ever produced
+   * the empty shell — the list every volunteer actually reads was never once
+   * exercised by a test. Exposing the renderer closes that hole.
+   */
+  App.screens.give.renderList = renderGiveList;
+
   App.screens.give.mount = function () {
     var g = giveState();
     if (g.step === 1) return mountGiveWhen();
@@ -1270,6 +1419,31 @@
     return order.map(function (type) { return { type: type, rows: byType[type] }; });
   }
 
+  /**
+   * The instrument's own note, shown wherever it is about to be handed over.
+   *
+   * A note like "tabla skin is thin — no hard playing" or "belongs to Ramesh"
+   * is written once in the inventory and is worth nothing if it only lives
+   * there. The moment it matters is the moment somebody is picking the
+   * instrument up, so it follows the instrument through the whole Give out
+   * flow: the picker, the set pieces, and the final summary.
+   *
+   * `size` is 'full' in the list and 'tight' where space is short.
+   */
+  function itemNote(item, size) {
+    var note = item && String(item.notes || '').trim();
+    if (!note) return '';
+
+    if (size === 'tight') {
+      return '<span class="ml-1 text-amber-700" title="' + UI.esc(note) + '">📌</span>';
+    }
+    return '<span class="mt-1 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1 ' +
+      'text-xs text-amber-900">' +
+      '<span class="shrink-0" aria-hidden="true">📌</span>' +
+      '<span class="min-w-0">' + UI.esc(note) + '</span>' +
+    '</span>';
+  }
+
   function giveStepItems() {
     var g = giveState();
     var ev = App.eventById(g.event_id);
@@ -1421,6 +1595,8 @@
               UI.esc(row.busyChildren.map(function (b) { return b.item.name; }).join(', ')) +
               '</span>'
             : '') +
+
+          itemNote(item) +
         '</span>' +
 
         (picked
@@ -1473,7 +1649,7 @@
                 '<span class="min-w-0 flex-1">' +
                   '<span class="block truncate text-xs font-medium ' +
                     (kidPicked ? 'text-saffron-900' : 'text-stone-700') + '">' +
-                    UI.esc(kid.name) + '</span>' +
+                    UI.esc(kid.name) + itemNote(kid, 'tight') + '</span>' +
                   '<span class="block font-mono text-[0.65rem] text-stone-400">' +
                     UI.esc(kid.asset_id) + '</span>' +
                 '</span>' +
@@ -1529,6 +1705,13 @@
       g.chosen[target.asset_id] = true;
       scanFeedback(true);
       UI.toast('Added ' + target.name, 'success');
+
+      // Scanning is the one moment the volunteer is holding the instrument and
+      // not reading the list, so a note has to come to them. Given longer on
+      // screen than an ordinary confirmation, because it is the whole point.
+      var note = String((target.notes || '')).trim();
+      if (note) UI.toast('📌 ' + target.name + ': ' + note, 'info', 9000);
+
       renderGiveList();
     });
 
@@ -1573,11 +1756,14 @@
       });
 
       if (!kids.length) {
-        return '<li class="flex items-center gap-3 border-b border-stone-100 px-4 py-3 ' +
+        return '<li class="flex items-start gap-3 border-b border-stone-100 px-4 py-3 ' +
           'last:border-0">' +
           '<span class="text-base" aria-hidden="true">🎵</span>' +
-          '<span class="min-w-0 flex-1 text-sm font-medium text-stone-800">' +
-            UI.esc(item.name) + '</span>' +
+          '<span class="min-w-0 flex-1">' +
+            '<span class="block text-sm font-medium text-stone-800">' +
+              UI.esc(item.name) + '</span>' +
+            itemNote(item) +
+          '</span>' +
           '<span class="shrink-0 font-mono text-xs text-stone-400">' +
             UI.esc(item.asset_id) + '</span>' +
         '</li>';
@@ -1595,6 +1781,7 @@
                 (going.length < kids.length
                   ? ' · ' + (kids.length - going.length) + ' left behind'
                   : '') + '</span>' +
+              itemNote(item) +
             '</span>' +
             '<svg class="chevron h-4 w-4 shrink-0 text-stone-400 transition-transform" ' +
               'fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" ' +
@@ -1607,7 +1794,7 @@
               return '<li class="flex items-center gap-2 py-1 text-xs ' +
                 (ok ? 'text-stone-600' : 'text-stone-400 line-through') + '">' +
                 '<span aria-hidden="true">' + (ok ? '•' : '✕') + '</span>' +
-                UI.esc(k.name) + '</li>';
+                UI.esc(k.name) + (ok ? itemNote(k, 'tight') : '') + '</li>';
             }).join('') +
           '</ul>' +
         '</details>' +
@@ -3486,12 +3673,38 @@
               UI.input('new-code-2', '', { id: 'new-code-2', type: 'password' })) +
           '</div>') +
 
+        photoStorageCard() +
+
         '<div class="flex flex-wrap gap-2 pb-8">' +
           UI.button('Save settings', { action: 'settings-save', id: 'settings-save' }) +
           UI.button('Sign out of this device', { action: 'settings-signout', variant: 'quiet' }) +
         '</div>' +
       '</div>';
   };
+
+  /**
+   * Where the photos actually live. Worth saying out loud: they are the only
+   * part of this app that is not in the Sheet, so "where did they go?" is a
+   * fair question to have answered without digging through Drive.
+   */
+  function photoStorageCard() {
+    var url = App.data.photoFolderUrl;
+
+    return UI.card(
+      '<h2 class="text-base font-semibold text-stone-900">Where photos are kept</h2>' +
+      (url
+        ? '<p class="mt-0.5 mb-3 text-sm text-stone-500">' +
+            'In a folder called <strong>Instrument Tracker Photos</strong>, sitting next to ' +
+            'the Google Sheet in Drive. Move or rename it whenever you like — the app finds ' +
+            'it by its Drive ID, not by where it is.</p>' +
+          '<a href="' + UI.esc(url) + '" target="_blank" rel="noopener" ' +
+            'class="inline-flex items-center gap-2 rounded-lg bg-stone-100 px-3 py-2 ' +
+            'text-sm font-medium text-stone-700 hover:bg-stone-200">' +
+            '📁 Open the photos folder</a>'
+        : '<p class="mt-0.5 text-sm text-stone-500">' +
+            'No photos have been saved yet. The first one creates a folder called ' +
+            '<strong>Instrument Tracker Photos</strong> next to the Google Sheet in Drive.</p>'));
+  }
 
   App.actions['ref-add'] = function (button) {
     var list = document.getElementById(button.dataset.value);

@@ -380,7 +380,7 @@ var UI = (function () {
 
   /* ---------------- toasts ----------------------------------------- */
 
-  function toast(message, kind) {
+  function toast(message, kind, ms) {
     var host = document.getElementById('toasts');
     if (!host) return;
 
@@ -404,7 +404,7 @@ var UI = (function () {
       node.style.opacity = '0';
       node.style.transform = 'translateY(6px)';
       setTimeout(function () { node.remove(); }, 250);
-    }, kind === 'error' ? 7000 : 3500);
+    }, ms || (kind === 'error' ? 7000 : 3500));
   }
 
   /* ---------------- dialogs ---------------------------------------- */

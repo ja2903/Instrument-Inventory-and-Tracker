@@ -76,6 +76,8 @@ codes on `ContentService` output, so status lives in the payload.
 | `NOT_AVAILABLE` | The item is not free for the requested dates. Carries a `conflicts` array saying why. |
 | `ITEM_INACTIVE` | Item has been removed from inventory |
 | `DUPLICATE_ASSET_ID` | Asset ID already in use |
+| `CONFIRM_REQUIRED` | The action is destructive enough to need a second, deliberate tap — deleting the only photo of a damaged return. Resend with `confirm: true`. |
+| `DRIVE_NOT_AUTHORISED` | The script has never been granted Drive access, so photos cannot be saved. The owner runs `authorizePhotos()` once from the editor. Nothing else in the app is affected. |
 | `SERVER_ERROR` | Anything unexpected; the real stack goes to the Apps Script log, not to the user |
 
 ---
@@ -324,6 +326,41 @@ Create or update an event. Refuses to give an event a `parent_event_id` that its
 `{ "event_id": "EV-001", "checked_in_by": "Nilesh", "include_sub_events": true }` → checks in
 everything still out for that event and its sub-events, defaulting each to `good`. Response lists
 what was checked in so the screen can show it.
+
+### `uploadPhoto`
+`{ "data_url": "data:image/jpeg;base64,…", "asset_id": "TAB-014", "kind": "in" }` → saves the
+image to a Drive folder and returns `{ photo_url, file_id, name }`.
+
+`photo_url` is a `drive.google.com/thumbnail?id=…` link, **not** the `/view` page — only the
+thumbnail form renders inside an `<img>`. The file is set to "anyone with the link can view",
+because the volunteers looking at it are not signed in to the mandir's Google account.
+
+> **Needs a Drive scope the Sheet alone does not grant.** Apps Script works out a script's
+> permissions by reading its code and only asks for them when a person runs a function from the
+> editor — deploying a new version never asks. Until the owner runs `authorizePhotos()` once, every
+> call here returns `DRIVE_NOT_AUTHORISED`. Nothing else in the app is affected, which is precisely
+> what makes it confusing to diagnose.
+
+### `setMovementPhoto`
+`{ "movement_id": "MV-0007", "kind": "in", "photo_url": "…" }` → attaches or replaces the photo on
+a movement that already happened. Refuses to blank the photo on a damaged return. The superseded
+file stays in Drive, so retaking can never destroy evidence.
+
+### `deletePhoto`
+`{ "movement_id": "MV-0007", "kind": "in", "confirm": true }` → clears the photo from the record
+and moves the Drive file to the bin, where Drive keeps it for 30 days.
+
+Binned rather than destroyed, because photos get taken by accident — a thumb over the lens, the
+wrong instrument — and a delete tapped in a busy store room should be recoverable. Unlinking alone
+was not enough: that would leave the picture sitting in the mandir's Drive for ever.
+
+Deleting the photo on a **damaged** return needs `confirm: true`; without it the call returns
+`CONFIRM_REQUIRED`. The damage record itself — outcome, notes, the item's `maintenance` status —
+is never touched.
+
+If the row is cleared but Drive refuses to bin the file, the call still succeeds and reports
+`binned: false`. The volunteer asked for the photo to go away, and as far as the app is concerned
+it has.
 
 ### `saveSettings`
 Manages the reference lists and the access code in one call.

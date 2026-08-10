@@ -36,7 +36,7 @@ var App = (function () {
     var group = ({
       item: 'inventory', add: 'inventory', edit: 'inventory',
       event: 'events',
-      labels: 'more', settings: 'more', more: 'more'
+      labels: 'more', settings: 'more', more: 'more', onloan: 'more'
     })[name] || name;
 
     document.querySelectorAll('[data-nav]').forEach(function (link) {
@@ -536,6 +536,8 @@ App.screens.more = function () {
   var links = [
     { href: '#/events', icon: '📅', title: 'Events',
       text: 'Mahotsavs, sabhas and their sub-events.' },
+    { href: '#/onloan', icon: '📋', title: 'Out on loan',
+      text: 'Everything that is out, as a list you can print.' },
     { href: '#/labels', icon: '🏷', title: 'Print labels',
       text: 'Make a sheet of QR stickers for new instruments.' },
     { href: '#/scan', icon: '📷', title: 'Scan a sticker',
