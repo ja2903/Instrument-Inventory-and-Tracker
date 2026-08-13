@@ -236,6 +236,31 @@ var Api = (function () {
     });
   }
 
+  /*
+   * A write answers with the updated dataset attached, so the app does not have
+   * to turn round and ask for it. Stashed here and picked up by App.loadData(),
+   * which keeps every calling screen exactly as it was — they still just say
+   * "refresh", it simply no longer costs a round trip.
+   */
+  var freshBootstrap = null;
+
+  function takeFreshBootstrap() {
+    var payload = freshBootstrap;
+    freshBootstrap = null;
+    return payload;
+  }
+
+  // Actions where the app redraws afterwards. suggestAssetId and
+  // checkAvailability deliberately are not here: they change nothing, and
+  // dragging the whole dataset back on each keystroke would be worse than the
+  // problem being solved.
+  var REDRAWS_AFTER = {
+    checkout: true, checkin: true, allocate: true, cancelAllocation: true,
+    updateAllocation: true, saveItem: true, removeItem: true, saveEvent: true,
+    deleteEvent: true, bulkCheckinEvent: true, setMovementPhoto: true,
+    deletePhoto: true, saveSettings: true
+  };
+
   async function post(action, payload) {
     assertConfigured();
 
@@ -249,7 +274,8 @@ var Api = (function () {
         body: JSON.stringify({
           action: action,
           code: accessCode,
-          payload: payload || {}
+          payload: payload || {},
+          want_bootstrap: !!REDRAWS_AFTER[action]
         })
       });
     } catch (e) {
@@ -259,7 +285,12 @@ var Api = (function () {
     // No retry here on purpose — see withRetry. A repeated write could record
     // the same loan twice.
     try {
-      return unwrap(await parseResponse(response));
+      var data = unwrap(await parseResponse(response));
+      if (data && data.bootstrap) {
+        freshBootstrap = data.bootstrap;
+        delete data.bootstrap;      // callers should never have to know
+      }
+      return data;
     } catch (e) {
       if (e.code === 'TRANSIENT') {
         throw new ApiError('TRANSIENT',
@@ -276,13 +307,19 @@ var Api = (function () {
     setCode: setCode,
     clearCode: clearCode,
 
+    takeFreshBootstrap: takeFreshBootstrap,
+
     apiUrl: apiUrl,
     setApiUrl: setApiUrl,
     clearApiUrl: clearApiUrl,
     usingStoredUrl: function () { return !!storedUrl; },
 
     ping: function () { return get('ping'); },
-    bootstrap: function () { return get('bootstrap'); },
+    // `fresh` is what the Refresh button sends: skip the server's cache and
+    // read the Sheet, so a hand-edit shows up the moment somebody asks for it.
+    bootstrap: function (opts) {
+      return get('bootstrap', opts && opts.fresh ? { fresh: '1' } : {});
+    },
     item: function (assetId) { return get('item', { asset_id: assetId }); },
     resolve: function (q) { return get('resolve', { q: q }); },
     event: function (eventId) { return get('event', { event_id: eventId }); },

@@ -154,8 +154,14 @@ var App = (function () {
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
   }
 
-  async function loadData() {
-    data = await Api.bootstrap();
+  async function loadData(options) {
+    options = options || {};
+
+    // A write that just happened has already handed back the updated dataset,
+    // so asking the server again would be a second round trip for something
+    // we are holding. An explicit Refresh always goes to the Sheet.
+    var handed = options.fresh ? null : Api.takeFreshBootstrap();
+    data = handed || await Api.bootstrap({ fresh: options.fresh });
     writeSnapshot(data);
     return data;
   }
@@ -174,7 +180,7 @@ var App = (function () {
     if (options.showSpinner !== false) host.innerHTML = UI.spinner('Loading…');
     try {
       cacheResets.forEach(function (reset) { reset(); });
-      await loadData();
+      await loadData({ fresh: options.fresh });
       render();
     } catch (e) {
       handleError(e, { silent: true });
@@ -494,7 +500,8 @@ var App = (function () {
       icon.classList.add('animate-spin');
       label.textContent = 'Refreshing…';
       try {
-        await refresh({ showSpinner: false });
+        // The one place that bypasses every cache, server and device alike.
+        await refresh({ showSpinner: false, fresh: true });
         label.textContent = 'Up to date';
         setTimeout(function () { label.textContent = 'Refresh'; }, 1600);
       } finally {
