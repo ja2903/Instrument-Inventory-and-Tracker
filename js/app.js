@@ -100,8 +100,63 @@ var App = (function () {
 
   /* ---------------- data ------------------------------------------- */
 
+  /*
+   * Last known good data, kept on the device.
+   *
+   * Apps Script is not fast: a cold start is several seconds before it has even
+   * begun reading the Sheet. Waiting for that on every single open, just to
+   * show a shelf that has not changed since this morning, is most of what makes
+   * the app feel slow.
+   *
+   * So the last payload is kept and drawn immediately, and the real one is
+   * fetched behind it. The screen is usable at once and quietly corrects itself
+   * a second later. Writes never come from here — every save still goes
+   * straight to the Sheet and is confirmed by it.
+   */
+  var SNAPSHOT_KEY = 'instrument_tracker_snapshot';
+  var SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+  function readSnapshot() {
+    try {
+      var raw = window.localStorage.getItem(SNAPSHOT_KEY);
+      if (!raw) return null;
+      var saved = JSON.parse(raw);
+      if (!saved || !saved.at || !saved.data) return null;
+      if (Date.now() - saved.at > SNAPSHOT_MAX_AGE_MS) return null;
+
+      // Overdue counts are worked out against the server's idea of today, so a
+      // snapshot from yesterday would quietly mis-state what is late.
+      if (saved.data.today !== todayLocalISO()) return null;
+
+      return saved.data;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function clearSnapshot() {
+    try { window.localStorage.removeItem(SNAPSHOT_KEY); } catch (e) {}
+  }
+
+  function writeSnapshot(payload) {
+    try {
+      window.localStorage.setItem(SNAPSHOT_KEY,
+        JSON.stringify({ at: Date.now(), data: payload }));
+    } catch (e) {
+      // Storage full or blocked: the app simply loses the head start.
+    }
+  }
+
+  /** The device's date, only ever used to decide if a snapshot is too old. */
+  function todayLocalISO() {
+    var d = new Date();
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
   async function loadData() {
     data = await Api.bootstrap();
+    writeSnapshot(data);
     return data;
   }
 
@@ -481,8 +536,19 @@ var App = (function () {
      * time — indistinguishable, to anyone looking at it, from a broken page.
      */
     hideUnlock();
-    document.getElementById('screen').innerHTML =
-      UI.spinner('Loading your instruments…');
+
+    // Draw last time's data straight away if we have it, so the app is usable
+    // while the fetch is still in flight. Falls back to the spinner on a first
+    // ever open, or when the snapshot has gone stale.
+    var snapshot = readSnapshot();
+    if (snapshot) {
+      data = snapshot;
+      try { render(); } catch (e) { data = null; }
+    }
+    if (!data) {
+      document.getElementById('screen').innerHTML =
+        UI.spinner('Loading your instruments…');
+    }
 
     try {
       await loadData();
@@ -494,6 +560,12 @@ var App = (function () {
       } else if (e.code === 'NOT_CONFIGURED' || e.code === 'BAD_DEPLOYMENT') {
         hideUnlock();
         document.getElementById('screen').innerHTML = connectScreen(e.message);
+      } else if (snapshot) {
+        // There is already a usable screen up from the snapshot. Replacing it
+        // with an error page would take working information away from someone
+        // who can see it — say the update failed and leave the app alone.
+        UI.toast('Showing what was here last time — could not reach the Sheet just now.',
+                 'error');
       } else {
         hideUnlock();
         document.getElementById('screen').innerHTML =
@@ -545,6 +617,7 @@ var App = (function () {
 
     start: start, go: go, render: render, refresh: refresh, handleError: handleError,
     showUnlock: showUnlock, onRefresh: onRefresh, onNavigate: onNavigate,
+    clearSnapshot: clearSnapshot,
 
     items: items, itemById: itemById, activeItems: activeItems,
     topLevelItems: topLevelItems, childrenOf: childrenOf,

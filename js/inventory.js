@@ -956,6 +956,21 @@
   }
 
   App.screens.add.mount = App.screens.edit.mount = function (params) {
+    /*
+     * itemForm() returns an "Item not found" page instead of the form when the
+     * asset ID does not resolve — and this mount then ran anyway, dereferenced
+     * a null #is_kit, and threw. An uncaught TypeError in a mount takes the
+     * whole app down, so the graceful message was never actually seen: you got
+     * a dead screen instead.
+     *
+     * The ID stops resolving more easily than it looks. Editing an instrument
+     * and changing its asset ID leaves the old #/edit/OLD-ID route pointing at
+     * nothing, so a Back tap lands here; so does opening an instrument someone
+     * else has just removed.
+     */
+    var form = document.getElementById('item-form');
+    if (!form) return;
+
     var editing = params[0] ? App.itemById(params[0]) : null;
     renderChildren();
 
@@ -983,7 +998,7 @@
       } catch (e) { /* the karyakar can type one; not worth an error toast */ }
     });
 
-    document.getElementById('item-form').addEventListener('submit', function (e) {
+    form.addEventListener('submit', function (e) {
       e.preventDefault();
       saveItem(editing);
     });

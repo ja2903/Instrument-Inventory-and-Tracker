@@ -140,13 +140,56 @@ var Api = (function () {
     try {
       return JSON.parse(text);
     } catch (e) {
-      if (text.indexOf('<!DOCTYPE') !== -1 || text.indexOf('<html') !== -1) {
-        throw new ApiError('BAD_DEPLOYMENT',
-          'The app URL in config.js is not answering correctly. Check that the Apps Script ' +
-          'deployment is set to "Execute as: Me" and "Who has access: Anyone", and that the ' +
-          'URL ends in /exec.');
+      if (text.indexOf('<!DOCTYPE') === -1 && text.indexOf('<html') === -1) {
+        throw new ApiError('SERVER_ERROR', 'The server sent something unreadable. Try again.');
       }
-      throw new ApiError('SERVER_ERROR', 'The server sent something unreadable. Try again.');
+
+      /*
+       * Apps Script answers with HTML in two completely different situations,
+       * and telling a volunteer to go and check the deployment settings is only
+       * right in one of them.
+       *
+       *  - A genuinely misconfigured deployment bounces you to a Google sign-in
+       *    or "you need permission" page. Those pages say so.
+       *  - A working deployment ALSO returns HTML when Google is having a
+       *    moment: the script timed out, hit a quota, or the servers are busy.
+       *    That is transient and there is nothing to fix.
+       *
+       * Sending everyone to re-check settings that were never wrong wasted a
+       * lot of people's time, so the two are now separated.
+       */
+      var signIn = /accounts\.google\.com|ServiceLogin|signin|Sign in|need permission|Request access/i
+        .test(text);
+
+      if (signIn) {
+        throw new ApiError('BAD_DEPLOYMENT',
+          'The Apps Script deployment is refusing anonymous visitors. In the Apps Script ' +
+          'editor go to Deploy → Manage deployments, and set "Who has access" to Anyone ' +
+          'and "Execute as" to Me.');
+      }
+
+      throw new ApiError('TRANSIENT',
+        'Google did not answer that time. This is usually a busy moment at their end ' +
+        'rather than anything wrong with the app.');
+    }
+  }
+
+  /**
+   * Reads are safe to repeat, so a transient failure gets retried rather than
+   * shown. Writes deliberately are NOT retried: a checkout that did reach the
+   * Sheet before the connection dropped would be recorded twice, and a
+   * duplicate loan is worse than an error message.
+   */
+  async function withRetry(attempt) {
+    var delays = [400, 1200];          // ~1.6s of patience, then give up
+    for (var i = 0; ; i++) {
+      try {
+        return await attempt();
+      } catch (e) {
+        var worthRetrying = e.code === 'TRANSIENT' || e.code === 'OFFLINE';
+        if (!worthRetrying || i >= delays.length) throw e;
+        await new Promise(function (r) { setTimeout(r, delays[i]); });
+      }
     }
   }
 
@@ -179,16 +222,18 @@ var Api = (function () {
       { action: action, code: accessCode }, params || {}
     ));
 
-    var response;
-    try {
-      response = await fetch(apiUrl() + '?' + query.toString(), {
-        method: 'GET',
-        redirect: 'follow'    // Apps Script always redirects to googleusercontent.com
-      });
-    } catch (e) {
-      throw unreachable();
-    }
-    return unwrap(await parseResponse(response));
+    return withRetry(async function () {
+      var response;
+      try {
+        response = await fetch(apiUrl() + '?' + query.toString(), {
+          method: 'GET',
+          redirect: 'follow'    // Apps Script always redirects to googleusercontent.com
+        });
+      } catch (e) {
+        throw unreachable();
+      }
+      return unwrap(await parseResponse(response));
+    });
   }
 
   async function post(action, payload) {
@@ -210,7 +255,19 @@ var Api = (function () {
     } catch (e) {
       throw unreachable(' Nothing has been saved.');
     }
-    return unwrap(await parseResponse(response));
+
+    // No retry here on purpose — see withRetry. A repeated write could record
+    // the same loan twice.
+    try {
+      return unwrap(await parseResponse(response));
+    } catch (e) {
+      if (e.code === 'TRANSIENT') {
+        throw new ApiError('TRANSIENT',
+          'Google did not answer that time, so this may or may not have saved. ' +
+          'Press Refresh and check before trying again.');
+      }
+      throw e;
+    }
   }
 
   return {

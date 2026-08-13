@@ -3774,6 +3774,8 @@
     if (!await UI.confirm('Sign out of this device?',
         'You will need to type the access code again next time.', 'Sign out')) return;
     Api.clearCode();
+    // Signing out must not leave the mandir's inventory readable on the device.
+    App.clearSnapshot();
     window.location.hash = '#/';
     App.showUnlock('Signed out.');
   };
