@@ -1127,17 +1127,14 @@
   var labelSheet = 'avery';  // 'avery' (L7160/J8160) or 'plain' (cut them out)
 
   /**
-   * Which items get the big luggage-style tag: the set itself, and the bag or
-   * case it lives in. Both are tied on rather than stuck to an instrument.
+   * One printable label. Every label is the same size — one Avery L7160.
+   *
+   * Kit bags used to get a double-size luggage tag on its own plain sheet. In
+   * practice that meant two kinds of paper, two trips to the printer, and
+   * scissors. One size for everything is worth more than a bigger QR on a bag.
    */
-  function isBagLabel(item) {
-    return item.is_kit || /\bbag\b|\bcase\b/i.test(item.name);
-  }
-
-  /** One printable label. Kit bags get the bigger 40mm tag. */
   function labelHtml(item) {
     var parent = item.parent_asset_id ? App.itemById(item.parent_asset_id) : null;
-    var isBag = isBagLabel(item);
 
     var svg;
     try {
@@ -1150,7 +1147,7 @@
       svg = '<div class="text-xs text-red-600">ID too long for a QR code</div>';
     }
 
-    return '<div class="label' + (isBag ? ' label-bag' : '') + '">' +
+    return '<div class="label">' +
       '<div class="label-qr">' + svg + '</div>' +
       '<div class="label-text">' +
         '<div class="label-id">' + UI.esc(item.asset_id) + '</div>' +
@@ -1170,11 +1167,8 @@
 
     // Bag tags need a 48mm QR box, which is taller than an Avery label — so
     // they are printed separately rather than squeezed or straddling two.
-    var bagLabels = selected.filter(isBagLabel);
-    var normalLabels = selected.filter(function (i) { return !isBagLabel(i); });
-
-    // 21 address labels per sheet; 4 bag tags per plain sheet.
-    var sheets = Math.ceil(normalLabels.length / 21) + Math.ceil(bagLabels.length / 4);
+    // 21 labels per Avery L7160 sheet, and nothing prints anywhere else.
+    var sheets = Math.ceil(selected.length / 21);
 
     var groups = App.topLevelItems().map(function (parent) {
       return { parent: parent, children: App.childrenOf(parent.asset_id) };
@@ -1223,9 +1217,7 @@
         UI.button('Clear', { action: 'labels-none', variant: 'secondary' }) +
         '<span class="ml-auto text-sm text-stone-500">' +
           UI.plural(selected.length, 'label') + ' selected' +
-          (selected.length ? ' · ' + UI.plural(sheets, 'sheet') : '') +
-          (bagLabels.length
-            ? ' (incl. ' + UI.plural(bagLabels.length, 'bag tag') + ')' : '') + '</span>' +
+          (selected.length ? ' · ' + UI.plural(sheets, 'sheet') : '') + '</span>' +
         UI.button('Print', { action: 'labels-print', disabled: !selected.length }) +
       '</div>' +
 
@@ -1271,18 +1263,11 @@
         ? '<h2 class="no-print mb-3 text-base font-semibold text-stone-900">Preview</h2>' +
           '<div class="label-sheet' + (labelSheet === 'plain' ? ' sheet-plain' : '') + '"' +
             nudgeStyle() + '>' +
-            normalLabels.map(labelHtml).join('') + '</div>' +
-
-          (bagLabels.length
-            ? '<h3 class="no-print mb-2 mt-6 text-sm font-semibold text-stone-700">' +
-                'Kit bag tags — printed on a separate plain sheet</h3>' +
-              '<div class="label-sheet sheet-plain sheet-bags">' +
-                bagLabels.map(labelHtml).join('') + '</div>'
-            : '') +
+            selected.map(labelHtml).join('') + '</div>' +
           '<p class="no-print mt-6 rounded-xl bg-saffron-50 p-4 text-sm text-saffron-900">' +
             '<strong>Check the first sheet with a ruler.</strong> The black QR square should ' +
-            'measure about <strong>25mm</strong> across (40mm on a kit-bag tag). If it comes ' +
-            'out smaller, the printer is scaling the page down — set Scale to 100%.</p>'
+            'measure about <strong>25mm</strong> across. If it comes out smaller, the ' +
+            'printer is scaling the page down — set Scale to 100%.</p>'
         : UI.emptyState('🏷', 'No labels selected',
             'Tick the instruments you want labels for.'));
   };
@@ -1381,7 +1366,6 @@
         '<span class="block text-sm font-medium text-stone-800">' + UI.esc(item.name) + '</span>' +
         '<span class="block font-mono text-xs text-stone-400">' + UI.esc(item.asset_id) + '</span>' +
       '</span>' +
-      (item.is_kit ? '<span class="text-xs text-stone-400">40mm tag</span>' : '') +
     '</label>';
   }
 
