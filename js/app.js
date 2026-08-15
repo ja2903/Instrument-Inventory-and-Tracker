@@ -36,7 +36,7 @@ var App = (function () {
     var group = ({
       item: 'inventory', add: 'inventory', edit: 'inventory',
       event: 'events',
-      labels: 'more', settings: 'more', more: 'more', onloan: 'more'
+      labels: 'more', settings: 'more', more: 'more', onloan: 'more', tidy: 'more'
     })[name] || name;
 
     document.querySelectorAll('[data-nav]').forEach(function (link) {
@@ -675,6 +675,8 @@ App.screens.more = function () {
       text: 'Everything that is out, as a list you can print.' },
     { href: '#/labels', icon: '🏷', title: 'Print labels',
       text: 'Make a sheet of QR stickers for new instruments.' },
+    { href: '#/tidy', icon: '🧹', title: 'Tidy up old records',
+      text: 'Move finished loans out of the way to keep the app quick.' },
     { href: '#/scan', icon: '📷', title: 'Scan a sticker',
       text: 'Point the camera at any instrument to see what to do with it.' },
     { href: '#/settings', icon: '⚙️', title: 'Settings',

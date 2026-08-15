@@ -1180,9 +1180,11 @@
       return { parent: parent, children: App.childrenOf(parent.asset_id) };
     });
 
-    return UI.pageTitle('Print labels',
-        'Choose items, then print. Each label carries the QR code, the asset ID and the ' +
-        'mandir name.') +
+    return '<div class="no-print">' +
+        UI.pageTitle('Print labels',
+          'Choose items, then print. Each label carries the QR code, the asset ID and the ' +
+          'mandir name.') +
+      '</div>' +
 
       // Which paper is going in the printer decides the whole geometry, so it
       // is asked before anything else.
@@ -1209,7 +1211,8 @@
           ? '<p class="mt-2 rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600">' +
             'In the print dialog set <strong>Margins: None</strong> and ' +
             '<strong>Scale: 100%</strong>. Avery sheets carry their own margins — ' +
-            'adding the printer\'s on top shifts every label down a row.</p>'
+            'adding the printer\'s on top shifts every label down a row.</p>' +
+            nudgeControls()
           : '<p class="mt-2 rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600">' +
             'In the print dialog set <strong>Scale: 100%</strong> (not "fit to page") ' +
             'and turn headers and footers off.</p>') +
@@ -1266,7 +1269,8 @@
 
       (selected.length
         ? '<h2 class="no-print mb-3 text-base font-semibold text-stone-900">Preview</h2>' +
-          '<div class="label-sheet' + (labelSheet === 'plain' ? ' sheet-plain' : '') + '">' +
+          '<div class="label-sheet' + (labelSheet === 'plain' ? ' sheet-plain' : '') + '"' +
+            nudgeStyle() + '>' +
             normalLabels.map(labelHtml).join('') + '</div>' +
 
           (bagLabels.length
@@ -1281,6 +1285,89 @@
             'out smaller, the printer is scaling the page down — set Scale to 100%.</p>'
         : UI.emptyState('🏷', 'No labels selected',
             'Tick the instruments you want labels for.'));
+  };
+
+  /*
+   * Fine alignment for the printer in front of you.
+   *
+   * The Avery geometry in the stylesheet is exactly right on paper, but no two
+   * printers agree about where the paper actually is — feed rollers, driver
+   * margins and "borderless" settings all shift the sheet by a millimetre or
+   * two. That is enough to clip a column of £15 label stock.
+   *
+   * So the whole grid can be nudged. Set it once against a test sheet and it
+   * is remembered on this device.
+   */
+  var NUDGE_KEY = 'instrument_tracker_label_nudge';
+  var nudge = (function () {
+    try {
+      var saved = JSON.parse(window.localStorage.getItem(NUDGE_KEY) || 'null');
+      if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') return saved;
+    } catch (e) {}
+    return { x: 0, y: 0 };
+  })();
+
+  function saveNudge() {
+    try { window.localStorage.setItem(NUDGE_KEY, JSON.stringify(nudge)); } catch (e) {}
+  }
+
+  /** Added to the sheet's own padding, so 0/0 is the true Avery geometry. */
+  function nudgeStyle() {
+    if (!nudge.x && !nudge.y) return '';
+    return ' style="--nudge-x:' + nudge.x + 'mm; --nudge-y:' + nudge.y + 'mm"';
+  }
+
+  function nudgeControls() {
+    if (labelSheet !== 'avery') return '';
+
+    function stepper(axis, label, hint) {
+      return '<div class="flex items-center gap-2">' +
+        '<span class="w-24 text-xs text-stone-600">' + label + '</span>' +
+        '<button type="button" data-action="label-nudge" data-axis="' + axis + '" ' +
+          'data-value="-1" class="h-8 w-8 rounded-lg bg-white text-sm font-bold ' +
+          'text-stone-700 ring-1 ring-stone-200">\u2212</button>' +
+        '<span class="w-16 text-center font-mono text-xs text-stone-700">' +
+          (nudge[axis] > 0 ? '+' : '') + nudge[axis] + 'mm</span>' +
+        '<button type="button" data-action="label-nudge" data-axis="' + axis + '" ' +
+          'data-value="1" class="h-8 w-8 rounded-lg bg-white text-sm font-bold ' +
+          'text-stone-700 ring-1 ring-stone-200">+</button>' +
+        '<span class="text-xs text-stone-400">' + hint + '</span>' +
+      '</div>';
+    }
+
+    return '<details class="mt-2 rounded-lg bg-stone-50 px-3 py-2"' +
+        ((nudge.x || nudge.y) ? ' open' : '') + '>' +
+      '<summary class="cursor-pointer text-xs font-medium text-stone-600">' +
+        'Labels not lining up? Nudge the sheet' +
+        ((nudge.x || nudge.y)
+          ? ' <span class="font-mono text-stone-400">(' +
+            (nudge.x > 0 ? '+' : '') + nudge.x + ', ' +
+            (nudge.y > 0 ? '+' : '') + nudge.y + ')</span>'
+          : '') +
+      '</summary>' +
+      '<div class="mt-2 space-y-2">' +
+        '<p class="text-xs text-stone-500">Print one sheet on plain paper, hold it against ' +
+          'a sheet of labels, and adjust until they line up.</p>' +
+        stepper('x', 'Left / right', 'move right +') +
+        stepper('y', 'Up / down', 'move down +') +
+        '<button type="button" data-action="label-nudge-reset" ' +
+          'class="text-xs font-medium text-stone-500 underline-offset-2 hover:underline">' +
+          'Reset to 0</button>' +
+      '</div>' +
+    '</details>';
+  }
+
+  App.actions['label-nudge'] = function (button) {
+    var axis = button.dataset.axis === 'y' ? 'y' : 'x';
+    nudge[axis] = Math.max(-15, Math.min(15, nudge[axis] + Number(button.dataset.value)));
+    saveNudge();
+    App.render();
+  };
+
+  App.actions['label-nudge-reset'] = function () {
+    nudge = { x: 0, y: 0 };
+    saveNudge();
+    App.render();
   };
 
   function labelPicker(item, nested) {

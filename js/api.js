@@ -258,7 +258,7 @@ var Api = (function () {
     checkout: true, checkin: true, allocate: true, cancelAllocation: true,
     updateAllocation: true, saveItem: true, removeItem: true, saveEvent: true,
     deleteEvent: true, bulkCheckinEvent: true, setMovementPhoto: true,
-    deletePhoto: true, saveSettings: true
+    deletePhoto: true, saveSettings: true, archiveMovements: true
   };
 
   async function post(action, payload) {
@@ -339,6 +339,7 @@ var Api = (function () {
     uploadPhoto: function (payload) { return post('uploadPhoto', payload); },
     setMovementPhoto: function (payload) { return post('setMovementPhoto', payload); },
     deletePhoto: function (payload) { return post('deletePhoto', payload); },
+    archiveMovements: function (payload) { return post('archiveMovements', payload); },
     saveSettings: function (payload) { return post('saveSettings', payload); }
   };
 })();

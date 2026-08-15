@@ -736,6 +736,103 @@
 
   App.actions['onloan-print'] = function () { window.print(); };
 
+  /* ================================================================
+   * Tidy up old records
+   * ================================================================
+   *
+   * Deliberately here rather than in the Apps Script editor. Asking a karyakar
+   * to open a code editor to keep their own app quick is not a real option, and
+   * it is the sort of thing that then never gets done.
+   *
+   * It is also deliberately not automatic. Moving hundreds of rows is the kind
+   * of thing somebody should press a button for, having read what it will do.
+   */
+  var tidyPreview = null;      // { live, eligible, remaining, keep_days }
+
+  App.onRefresh(function () { tidyPreview = null; });
+
+  App.screens.tidy = function () {
+    return UI.pageTitle('Tidy up old records',
+        'The app reads every loan ever made each time it opens. Moving finished ones out ' +
+        'of the way keeps it quick as the years go by.') +
+
+      UI.card(
+        '<p class="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-900">' +
+          '<strong>This happens on its own.</strong> Loans that finished over a year ago are ' +
+          'moved out of the way automatically, a little at a time, while the app is used. ' +
+          'You do not need to come here at all — this page is only if you want to see it or ' +
+          'get it over with now.</p>' +
+
+        '<h2 class="mt-4 text-base font-semibold text-stone-900">What it does</h2>' +
+        '<ul class="mt-2 space-y-1.5 text-sm text-stone-600">' +
+          '<li>✓ Moves loans that <strong>finished over a year ago</strong> into a separate ' +
+            'list.</li>' +
+          '<li>✓ <strong>Nothing is deleted.</strong> Every instrument still shows its full ' +
+            'history, and every event still shows what went to it.</li>' +
+          '<li>✓ Anything <strong>still out</strong> stays put, however old it is.</li>' +
+        '</ul>' +
+
+        (tidyPreview
+          ? '<div class="mt-4 rounded-xl bg-stone-50 p-3 text-sm">' +
+              (tidyPreview.eligible
+                ? '<p class="font-semibold text-stone-900">' +
+                    UI.plural(tidyPreview.eligible, 'finished loan') + ' can be moved.</p>' +
+                  '<p class="mt-0.5 text-stone-600">' +
+                    tidyPreview.remaining + ' of ' + tidyPreview.live +
+                    ' would stay — everything from the last year, and everything still out.</p>'
+                : '<p class="font-semibold text-stone-900">Nothing needs moving yet.</p>' +
+                  '<p class="mt-0.5 text-stone-600">All ' + tidyPreview.live +
+                    ' loans are either recent or still out. Come back in a year or so.</p>') +
+            '</div>'
+          : '') +
+
+        '<div class="mt-4 flex flex-wrap gap-2">' +
+          (tidyPreview && tidyPreview.eligible
+            ? UI.button('Move ' + tidyPreview.eligible + ' old loans', { action: 'tidy-run' })
+            : UI.button('Check what can be moved',
+                { action: 'tidy-check', id: 'tidy-check' })) +
+          UI.button('Back', { href: '#/more', variant: 'secondary' }) +
+        '</div>') +
+
+      '<p class="mt-4 px-1 text-xs text-stone-400">' +
+        'Old records are moved into a MovementsArchive tab in the same Google Sheet. That tab ' +
+        'is only created once there is something to put in it.</p>';
+  };
+
+  App.actions['tidy-check'] = async function (button) {
+    var restore = UI.busy(button, 'Checking…');
+    try {
+      tidyPreview = await Api.archiveMovements({ preview: true });
+      App.render();
+    } catch (e) {
+      App.handleError(e);
+      restore();
+    }
+  };
+
+  App.actions['tidy-run'] = async function (button) {
+    var count = tidyPreview ? tidyPreview.eligible : 0;
+
+    var yes = await UI.confirm(
+      'Move ' + UI.plural(count, 'old loan') + '?',
+      'They go into a separate list in the same Google Sheet. Nothing is deleted, and every ' +
+      'instrument keeps showing its full history in the app.',
+      'Move them');
+    if (!yes) return;
+
+    var restore = UI.busy(button, 'Moving…');
+    try {
+      var result = await Api.archiveMovements({});
+      tidyPreview = null;
+      UI.toast('Moved ' + UI.plural(result.archived, 'old loan') + ' out of the way', 'success');
+      await App.refresh({ showSpinner: false });
+      App.go('#/more');
+    } catch (e) {
+      App.handleError(e);
+      restore();
+    }
+  };
+
   App.screens.dashboard = function () {
     var items = App.activeItems();
     var out = App.itemsOut();
