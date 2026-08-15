@@ -202,14 +202,24 @@ details[open] > summary .chevron { transform: rotate(180deg); }
     border-radius: 0.5mm;
   }
 
-  /* ---- default: Avery L7160 / J8160 ---- */
+  /* ---- default: Avery L7160 / J8160 ----
+   *
+   * 3 across, 7 down, 21 per sheet. The arithmetic has to come out exact or
+   * every label lands on a die-cut edge:
+   *
+   *   width : 7.2 + (63.5 x 3) + (2.5 x 2) = 202.7mm, leaving 7.3mm at the right
+   *   height: 15.1 + (38.1 x 7)            = 281.8mm, leaving 15.2mm at the foot
+   *
+   * --nudge-x / --nudge-y are the per-printer correction set on the Labels
+   * screen. They default to 0, which is the true Avery geometry above.
+   */
   .label-sheet {
     display: grid;
     grid-template-columns: repeat(3, 63.5mm);
     column-gap: 2.5mm;
     row-gap: 0;
     justify-content: start;
-    padding: 15.1mm 0 0 7.2mm;
+    padding: calc(15.1mm + var(--nudge-y, 0mm)) 0 0 calc(7.2mm + var(--nudge-x, 0mm));
     box-sizing: border-box;
   }
 
@@ -276,27 +286,45 @@ details[open] > summary .chevron { transform: rotate(180deg); }
   .label-bag .label-name { font-size: 9pt; }
 }
 
-/* On screen the sheet is a preview of the same thing. */
-.label-sheet {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
-  gap: 0.75rem;
+/*
+ * On screen the sheet is a preview of the same thing.
+ *
+ * ===================================================================
+ *  THESE MUST STAY INSIDE @media screen.
+ *
+ *  They used to be bare rules sitting after the @media print block.
+ *  Same specificity as the print rules, later in the file — so while
+ *  PRINTING, this block won: the sheet came out as
+ *  repeat(auto-fill, minmax(11rem, 1fr)), which is four columns across
+ *  A4 instead of Avery's three. Every label landed in the wrong place,
+ *  shifted right, and the right-hand column ran off the page.
+ *
+ *  A media query adds no specificity. Only source order was deciding
+ *  it, and the preview happened to be written last.
+ * ===================================================================
+ */
+@media screen {
+  .label-sheet {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: 0.75rem;
+  }
+  .label {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    background: #fff;
+    border: 1px dashed #d6d3d1;
+    border-radius: 0.75rem;
+  }
+  .label-qr { width: 4.5rem; height: 4.5rem; flex: none; }
+  .label-qr svg { width: 100%; height: 100%; display: block; }
+  .label-text { min-width: 0; }
+  .label-id { font-size: 1rem; font-weight: 700; line-height: 1.1; }
+  .label-name { font-size: .6875rem; line-height: 1.25; margin-top: .125rem; color: #44403c; }
+  .label-parent { font-size: .625rem; line-height: 1.25; margin-top: .125rem; color: #78716c; }
+  .label-org { font-size: .5625rem; line-height: 1.2; margin-top: .25rem; color: #a8a29e; }
+  .label-bag .label-qr { width: 6.5rem; height: 6.5rem; }
+  .label-bag .label-id { font-size: 1.25rem; }
 }
-.label {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  background: #fff;
-  border: 1px dashed #d6d3d1;
-  border-radius: 0.75rem;
-}
-.label-qr { width: 4.5rem; height: 4.5rem; flex: none; }
-.label-qr svg { width: 100%; height: 100%; display: block; }
-.label-text { min-width: 0; }
-.label-id { font-size: 1rem; font-weight: 700; line-height: 1.1; }
-.label-name { font-size: .6875rem; line-height: 1.25; margin-top: .125rem; color: #44403c; }
-.label-parent { font-size: .625rem; line-height: 1.25; margin-top: .125rem; color: #78716c; }
-.label-org { font-size: .5625rem; line-height: 1.2; margin-top: .25rem; color: #a8a29e; }
-.label-bag .label-qr { width: 6.5rem; height: 6.5rem; }
-.label-bag .label-id { font-size: 1.25rem; }
