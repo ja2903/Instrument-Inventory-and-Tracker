@@ -257,33 +257,6 @@ details[open] > summary .chevron { transform: rotate(180deg); }
   .label-name { font-size: 7pt; line-height: 1.2; margin-top: .8mm; }
   .label-parent { font-size: 6pt; color: #444; line-height: 1.2; margin-top: .5mm; }
   .label-org { font-size: 5.5pt; color: #666; line-height: 1.1; margin-top: 1mm; }
-
-  /*
-   * Kit bag tags print on their OWN page, always on plain paper.
-   *
-   * The brief asks for a 40mm QR on a bag tag, and 40mm of symbol needs a
-   * 48mm box — taller than an Avery L7160 label is (38.1mm). Mixing them into
-   * the address-label grid also left holes wherever a double-size tag landed,
-   * wasting bought stock. So they are separated: peel-and-stick sheet for the
-   * instruments, one plain sheet of luggage tags to cut and tie on.
-   */
-  .sheet-bags {
-    break-before: page;
-    page-break-before: always;
-    display: grid;
-    grid-template-columns: repeat(2, 90mm);
-    gap: 6mm;
-    padding: 10mm 0 0 10mm;
-    box-sizing: border-box;
-  }
-  .sheet-bags .label {
-    height: 60mm;
-    border: 0.3mm dashed #bbb;
-    border-radius: 2mm;
-  }
-  .label-bag .label-qr { width: 48mm; height: 48mm; }   /* 40.3mm symbol */
-  .label-bag .label-id { font-size: 16pt; }
-  .label-bag .label-name { font-size: 9pt; }
 }
 
 /*
@@ -325,6 +298,4 @@ details[open] > summary .chevron { transform: rotate(180deg); }
   .label-name { font-size: .6875rem; line-height: 1.25; margin-top: .125rem; color: #44403c; }
   .label-parent { font-size: .625rem; line-height: 1.25; margin-top: .125rem; color: #78716c; }
   .label-org { font-size: .5625rem; line-height: 1.2; margin-top: .25rem; color: #a8a29e; }
-  .label-bag .label-qr { width: 6.5rem; height: 6.5rem; }
-  .label-bag .label-id { font-size: 1.25rem; }
 }
