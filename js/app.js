@@ -407,6 +407,28 @@ var App = (function () {
                               ignoreAllocationIds, forEventId);
   }
 
+  /**
+   * The open loan, when this instrument is already out to `forEventId` or to
+   * the mahotsav it belongs to — otherwise null.
+   *
+   * Availability alone stopped being enough to describe the picker once loans
+   * could move within an event: an instrument sitting in the store room and one
+   * already in Paris both come back "free", and a volunteer packing a van needs
+   * to know which is which.
+   */
+  function alreadyOutTo(assetId, forEventId) {
+    if (!forEventId) return null;
+    var state = availabilityState();
+    var open = (state.movements || []).filter(function (m) {
+      return m.asset_id === assetId && !m.checked_in_at;
+    })[0];
+    if (!open) return null;
+
+    var here = Rules.nestedEvents(state, open.sub_event_id || open.event_id, forEventId) ||
+               Rules.nestedEvents(state, open.event_id, forEventId);
+    return here ? open : null;
+  }
+
   function isFreeBetween(assetId, from, to, ignoreAllocationIds, forEventId) {
     return conflictsFor(assetId, from, to, ignoreAllocationIds, forEventId).length === 0;
   }
@@ -644,6 +666,7 @@ var App = (function () {
     itemsOut: itemsOut, overdueItems: overdueItems,
     availabilityState: availabilityState, conflictsFor: conflictsFor,
     isFreeBetween: isFreeBetween, kitAvailability: kitAvailability,
+    alreadyOutTo: alreadyOutTo,
     lastName: lastName, rememberName: rememberName
   };
 })();

@@ -1543,6 +1543,35 @@
     '</span>';
   }
 
+  /**
+   * "Already out to Paris Mandir Mahotsav" — shown on instruments that are not
+   * in the store room at all.
+   *
+   * Since loans can move within an event, the picker offers two very different
+   * things side by side: instruments to fetch off a shelf, and instruments
+   * already in Paris that would merely be re-labelled. Both are "available".
+   * Someone loading a van needs to be able to tell them apart at a glance.
+   */
+  function alreadyHereBadge(item, eventId) {
+    var open = App.alreadyOutTo(item.asset_id, eventId);
+    if (!open) return '';
+
+    var where = open.sub_event_name || open.event_name ||
+                (App.eventById(open.sub_event_id || open.event_id) || {}).name || '';
+    var sameEvent = (open.sub_event_id || open.event_id) === eventId;
+
+    return '<span class="mt-1 flex items-start gap-1.5 rounded-lg bg-sky-50 px-2 py-1 ' +
+      'text-xs text-sky-900">' +
+      '<span class="shrink-0" aria-hidden="true">📍</span>' +
+      '<span class="min-w-0">' +
+        (sameEvent
+          ? 'Already out to this event — nothing to fetch'
+          : 'Already out to ' + UI.esc(where || 'this event') +
+            ' — ticking it moves it here') +
+      '</span>' +
+    '</span>';
+  }
+
   function giveStepItems() {
     var g = giveState();
     var ev = App.eventById(g.event_id);
@@ -1695,6 +1724,7 @@
               '</span>'
             : '') +
 
+          alreadyHereBadge(item, g.event_id) +
           itemNote(item) +
         '</span>' +
 
