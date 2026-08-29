@@ -217,43 +217,48 @@ var Rules = (function () {
    * clash — the set is already there. Making people check it in and straight
    * back out again recorded a return that never happened.
    */
-  /**
-   * Is [innerFrom, innerTo] entirely inside [outerFrom, outerTo]?
-   *
-   * Containment, not overlap, is what makes the same-mahotsav exemption safe.
-   * The instruments are on site for the period they are committed for, so a
-   * sub-event inside that period can use them. A window that runs past the day
-   * they are due back is a real clash and still gets reported — and two
-   * sub-events wanting the same harmonium on overlapping days is still a
-   * double-booking, whichever mahotsav they belong to.
-   */
-  function rangeContains(outerFrom, outerTo, innerFrom, innerTo) {
-    var o1 = parseDate(outerFrom), o2 = parseDate(outerTo);
-    var i1 = parseDate(innerFrom), i2 = parseDate(innerTo);
-
-    if (i1 === null && i2 === null) return false;   // an unknown window contains nothing
-    if (i1 === null) i1 = i2;
-    if (i2 === null) i2 = i1;
-
-    if (o1 === null && o2 === null) return false;
-    if (o1 === null) o1 = -Infinity;
-    if (o2 === null) o2 = Infinity;
-
-    return i1 >= o1 && i2 <= o2;
+  /** The chain of events from `eventId` up to its mahotsav, inclusive. */
+  function eventChain(state, eventId) {
+    var parents = (state && state.eventParents) || {};
+    var chain = [];
+    var current = eventId;
+    var guard = 0;
+    while (current && guard++ < 10) {
+      chain.push(current);
+      current = parents[current];
+    }
+    return chain;
   }
 
-  function sameEventTree(state, a, b) {
+  /**
+   * Nested events: one contains the other, or they are the same event.
+   *
+   * This is the test that decides whether a commitment counts as a clash.
+   *
+   *   Paris Mahotsav  <->  its Nagar Yatra   nested — the same occasion, so
+   *                                          instruments already there can be
+   *                                          booked for the day itself
+   *   Bal Din         <->  Nagar Yatra       NOT nested — two different days of
+   *                                          the mahotsav competing for the same
+   *                                          harmonium, which is a real clash
+   *
+   * Siblings are deliberately excluded. An earlier version of this treated the
+   * whole mahotsav as one pool, which let two sub-events double-book the same
+   * instrument on the same afternoon.
+   */
+  function nestedEvents(state, a, b) {
     if (!a || !b) return false;
-    var rootA = rootEventOf(state, a);
-    var rootB = rootEventOf(state, b);
-    return !!rootA && rootA === rootB;
+    if (a === b) return true;
+    return eventChain(state, a).indexOf(b) !== -1 ||
+           eventChain(state, b).indexOf(a) !== -1;
   }
 
   /**
    * `forEventId` is the event the instrument is wanted FOR. When given, a
-   * commitment to the same mahotsav stops counting as a clash. Omit it and
-   * behaviour is exactly as it always was — every caller that does not care
-   * about events is unaffected.
+   * commitment to a NESTED event — the mahotsav this one sits inside, or this
+   * event itself — stops counting as a clash. Omit it and behaviour is exactly
+   * as it always was, so every caller that does not care about events is
+   * unaffected.
    */
   function conflictsFor(state, assetId, from, to, ignoreAllocationIds, forEventId) {
     var ignore = {};
@@ -286,17 +291,22 @@ var Rules = (function () {
       var effectiveTo = late ? '' : dueBack;
 
       /*
-       * Already out to this same mahotsav, for a period that covers the dates
-       * being asked for? Then it is on site and this is not a clash.
+       * Already out to this very occasion, over the days being asked about?
+       * Then it is on site and this is not a clash.
        *
-       * Deliberately NOT applied when the loan is overdue: nobody knows when an
-       * overdue instrument is coming back, so promising it onward — even to the
-       * same mahotsav — is a promise that cannot be kept.
+       * Compared against the BOOKED window — the day it went out to the day it
+       * is due back — rather than against "now until it comes back". Those are
+       * the same thing for a loan running to plan, and importantly different
+       * for one that is overdue: an instrument out to the mahotsav and three
+       * days late is still available to that mahotsav's own sub-events, but is
+       * still not something you can promise for next month, because nobody
+       * knows when it is coming back.
        */
-      var outToSameEvent = mv && forEventId && !late &&
-        (sameEventTree(state, mv.event_id, forEventId) ||
-         sameEventTree(state, mv.sub_event_id, forEventId)) &&
-        rangeContains(today, dueBack, from, to);
+      var outFrom = String(mv && mv.checked_out_at || '').slice(0, 10) || today;
+      var outToSameEvent = mv && forEventId &&
+        (nestedEvents(state, mv.sub_event_id || mv.event_id, forEventId) ||
+         nestedEvents(state, mv.event_id, forEventId)) &&
+        rangesOverlap(from, to, outFrom, dueBack);
 
       if (!outToSameEvent && rangesOverlap(from, to, today, effectiveTo)) {
         out.push({
@@ -321,8 +331,9 @@ var Rules = (function () {
       if (a.asset_id !== assetId) return;
       if (a.status !== 'open') return;
       if (ignore[a.allocation_id]) return;
-      if (forEventId && sameEventTree(state, a.event_id, forEventId) &&
-          rangeContains(a.needed_from, a.expected_return_date, from, to)) return;
+      // A booking on the same occasion — the mahotsav itself, or this very
+      // sub-event — is the same commitment, not a competing one.
+      if (forEventId && nestedEvents(state, a.event_id, forEventId)) return;
       if (!rangesOverlap(from, to, a.needed_from, a.expected_return_date)) return;
 
       out.push({
@@ -703,11 +714,12 @@ var Rules = (function () {
         // Unless the set is out to this very mahotsav, in which case the piece
         // is already on site and booking it for a sub-event is exactly right.
         var parentMv = openMovementFor(state.movements || [], item.parent_asset_id);
+        var parentOutFrom = String(parentMv && parentMv.checked_out_at || '').slice(0, 10);
         var parentHere = parentMv && req.event_id &&
-          (sameEventTree(state, parentMv.event_id, req.event_id) ||
-           sameEventTree(state, parentMv.sub_event_id, req.event_id)) &&
-          rangeContains(state.today, parentMv.expected_return_date, from, to) &&
-          daysOverdue(parentMv.expected_return_date, '', state.today) === 0;
+          (nestedEvents(state, parentMv.sub_event_id || parentMv.event_id, req.event_id) ||
+           nestedEvents(state, parentMv.event_id, req.event_id)) &&
+          rangesOverlap(from, to, parentOutFrom || state.today,
+                        parentMv.expected_return_date);
 
         if (parent && parent.status !== 'available' && !parentHere) {
           return err('PARENT_OUT',
@@ -855,9 +867,8 @@ var Rules = (function () {
     // availability over a window
     rangesOverlap: rangesOverlap,
     conflictsFor: conflictsFor,
-    rangeContains: rangeContains,
     rootEventOf: rootEventOf,
-    sameEventTree: sameEventTree,
+    nestedEvents: nestedEvents,
     isFreeBetween: isFreeBetween,
     windowPhrase: windowPhrase,
     // decisions
