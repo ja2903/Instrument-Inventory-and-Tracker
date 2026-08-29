@@ -384,8 +384,14 @@ var App = (function () {
    * can re-evaluate every instrument the instant a date changes.
    */
   function availabilityState() {
+    var eventParents = {};
+    ((data && data.events) || []).forEach(function (e) {
+      if (e.parent_event_id) eventParents[e.event_id] = e.parent_event_id;
+    });
+
     return {
       today: (data && data.today) || '',
+      eventParents: eventParents,
       items: items(),
       movements: (data && data.openMovements) || [],
       allocations: (data && data.openAllocations) || []
@@ -396,12 +402,13 @@ var App = (function () {
    * Why an instrument cannot be used between two dates — an empty array means
    * it is free. Same function the server runs before it saves anything.
    */
-  function conflictsFor(assetId, from, to, ignoreAllocationIds) {
-    return Rules.conflictsFor(availabilityState(), assetId, from, to, ignoreAllocationIds);
+  function conflictsFor(assetId, from, to, ignoreAllocationIds, forEventId) {
+    return Rules.conflictsFor(availabilityState(), assetId, from, to,
+                              ignoreAllocationIds, forEventId);
   }
 
-  function isFreeBetween(assetId, from, to, ignoreAllocationIds) {
-    return conflictsFor(assetId, from, to, ignoreAllocationIds).length === 0;
+  function isFreeBetween(assetId, from, to, ignoreAllocationIds, forEventId) {
+    return conflictsFor(assetId, from, to, ignoreAllocationIds, forEventId).length === 0;
   }
 
   /**
@@ -409,11 +416,11 @@ var App = (function () {
    * clashes plus, separately, the pieces that are spoken for — so the UI can
    * say "available, without the hammer" rather than a flat yes or no.
    */
-  function kitAvailability(assetId, from, to, ignoreAllocationIds) {
-    var own = conflictsFor(assetId, from, to, ignoreAllocationIds);
+  function kitAvailability(assetId, from, to, ignoreAllocationIds, forEventId) {
+    var own = conflictsFor(assetId, from, to, ignoreAllocationIds, forEventId);
     var busyChildren = [];
     childrenOf(assetId).forEach(function (child) {
-      var c = conflictsFor(child.asset_id, from, to, ignoreAllocationIds);
+      var c = conflictsFor(child.asset_id, from, to, ignoreAllocationIds, forEventId);
       if (c.length) busyChildren.push({ item: child, conflicts: c });
     });
     return { conflicts: own, busyChildren: busyChildren, available: own.length === 0 };

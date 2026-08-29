@@ -1488,7 +1488,9 @@
           .toLowerCase().indexOf(needle) !== -1;
       })
       .map(function (item) {
-        var avail = App.kitAvailability(item.asset_id, g.from, g.to);
+        // g.event_id so a set already out to this mahotsav shows as usable
+        // for its sub-events, instead of demanding a pointless return trip.
+        var avail = App.kitAvailability(item.asset_id, g.from, g.to, null, g.event_id);
         return {
           item: item,
           available: avail.available,
@@ -1723,11 +1725,11 @@
                 'd="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>' +
             '</summary>' +
             '<div>' + kids.map(function (kid) {
-              var free = App.isFreeBetween(kid.asset_id, g.from, g.to);
+              var free = App.isFreeBetween(kid.asset_id, g.from, g.to, null, g.event_id);
               var kidPicked = !!g.chosen[kid.asset_id];
 
               if (!free) {
-                var why = App.conflictsFor(kid.asset_id, g.from, g.to)[0];
+                var why = App.conflictsFor(kid.asset_id, g.from, g.to, null, g.event_id)[0];
                 return '<div class="flex items-center gap-3 py-2 pl-14 pr-4 opacity-60">' +
                   '<span class="text-xs text-stone-400" aria-hidden="true">✕</span>' +
                   '<span class="min-w-0 flex-1 text-xs text-stone-500 line-through">' +
@@ -1794,7 +1796,7 @@
       var target = item.parent_asset_id ? App.itemById(item.parent_asset_id) : item;
       if (!target) return;
 
-      if (!App.isFreeBetween(target.asset_id, g.from, g.to)) {
+      if (!App.isFreeBetween(target.asset_id, g.from, g.to, null, g.event_id)) {
         scanFeedback(false);
         UI.toast(target.name + ' is not free for these dates', 'error');
         return;
@@ -1849,7 +1851,7 @@
     var lines = chosen.map(function (item) {
       var kids = item.is_kit ? App.childrenOf(item.asset_id) : [];
       var going = kids.filter(function (k) {
-        return App.isFreeBetween(k.asset_id, g.from, g.to);
+        return App.isFreeBetween(k.asset_id, g.from, g.to, null, g.event_id);
       });
 
       if (!kids.length) {

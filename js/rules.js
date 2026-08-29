@@ -193,7 +193,69 @@ var Rules = (function () {
    *
    * `ignoreAllocationIds` lets an allocation being edited exclude itself.
    */
-  function conflictsFor(state, assetId, from, to, ignoreAllocationIds) {
+  /**
+   * The top-level event a given event belongs to.
+   *
+   * `state.eventParents` is a plain { child: parent } map. The guard stops a
+   * hand-edited Sheet with a circular parent from hanging the script, exactly
+   * as rootEventId does on the server.
+   */
+  function rootEventOf(state, eventId) {
+    var parents = (state && state.eventParents) || {};
+    var current = eventId;
+    var guard = 0;
+    while (current && parents[current] && guard++ < 10) current = parents[current];
+    return current || '';
+  }
+
+  /**
+   * Two events belonging to the same mahotsav.
+   *
+   * This is what lets instruments move around inside one event without a round
+   * trip to the store room. If a tabla set is already out to Paris Mandir
+   * Mahotsav, booking it for the Nagar Yatra *within* that mahotsav is not a
+   * clash — the set is already there. Making people check it in and straight
+   * back out again recorded a return that never happened.
+   */
+  /**
+   * Is [innerFrom, innerTo] entirely inside [outerFrom, outerTo]?
+   *
+   * Containment, not overlap, is what makes the same-mahotsav exemption safe.
+   * The instruments are on site for the period they are committed for, so a
+   * sub-event inside that period can use them. A window that runs past the day
+   * they are due back is a real clash and still gets reported — and two
+   * sub-events wanting the same harmonium on overlapping days is still a
+   * double-booking, whichever mahotsav they belong to.
+   */
+  function rangeContains(outerFrom, outerTo, innerFrom, innerTo) {
+    var o1 = parseDate(outerFrom), o2 = parseDate(outerTo);
+    var i1 = parseDate(innerFrom), i2 = parseDate(innerTo);
+
+    if (i1 === null && i2 === null) return false;   // an unknown window contains nothing
+    if (i1 === null) i1 = i2;
+    if (i2 === null) i2 = i1;
+
+    if (o1 === null && o2 === null) return false;
+    if (o1 === null) o1 = -Infinity;
+    if (o2 === null) o2 = Infinity;
+
+    return i1 >= o1 && i2 <= o2;
+  }
+
+  function sameEventTree(state, a, b) {
+    if (!a || !b) return false;
+    var rootA = rootEventOf(state, a);
+    var rootB = rootEventOf(state, b);
+    return !!rootA && rootA === rootB;
+  }
+
+  /**
+   * `forEventId` is the event the instrument is wanted FOR. When given, a
+   * commitment to the same mahotsav stops counting as a clash. Omit it and
+   * behaviour is exactly as it always was — every caller that does not care
+   * about events is unaffected.
+   */
+  function conflictsFor(state, assetId, from, to, ignoreAllocationIds, forEventId) {
     var ignore = {};
     (ignoreAllocationIds || []).forEach(function (id) { ignore[id] = true; });
 
@@ -223,7 +285,20 @@ var Rules = (function () {
       var late = daysOverdue(dueBack, '', today) > 0;
       var effectiveTo = late ? '' : dueBack;
 
-      if (rangesOverlap(from, to, today, effectiveTo)) {
+      /*
+       * Already out to this same mahotsav, for a period that covers the dates
+       * being asked for? Then it is on site and this is not a clash.
+       *
+       * Deliberately NOT applied when the loan is overdue: nobody knows when an
+       * overdue instrument is coming back, so promising it onward — even to the
+       * same mahotsav — is a promise that cannot be kept.
+       */
+      var outToSameEvent = mv && forEventId && !late &&
+        (sameEventTree(state, mv.event_id, forEventId) ||
+         sameEventTree(state, mv.sub_event_id, forEventId)) &&
+        rangeContains(today, dueBack, from, to);
+
+      if (!outToSameEvent && rangesOverlap(from, to, today, effectiveTo)) {
         out.push({
           kind: 'checked_out',
           from: today,
@@ -246,6 +321,8 @@ var Rules = (function () {
       if (a.asset_id !== assetId) return;
       if (a.status !== 'open') return;
       if (ignore[a.allocation_id]) return;
+      if (forEventId && sameEventTree(state, a.event_id, forEventId) &&
+          rangeContains(a.needed_from, a.expected_return_date, from, to)) return;
       if (!rangesOverlap(from, to, a.needed_from, a.expected_return_date)) return;
 
       out.push({
@@ -275,8 +352,8 @@ var Rules = (function () {
   }
 
   /** True when nothing at all stands in the way of that window. */
-  function isFreeBetween(state, assetId, from, to, ignoreAllocationIds) {
-    return conflictsFor(state, assetId, from, to, ignoreAllocationIds).length === 0;
+  function isFreeBetween(state, assetId, from, to, ignoreAllocationIds, forEventId) {
+    return conflictsFor(state, assetId, from, to, ignoreAllocationIds, forEventId).length === 0;
   }
 
   function label(item) {
@@ -606,7 +683,7 @@ var Rules = (function () {
       // An explicitly chosen item that clashes is a hard error naming the clash,
       // so the karyakar can go back to the requesting centre with a real answer
       // rather than a shrug.
-      var clashes = conflictsFor(state, id, from, to, req.ignore_allocation_ids);
+      var clashes = conflictsFor(state, id, from, to, req.ignore_allocation_ids, req.event_id);
       if (clashes.length) {
         return {
           ok: false,
@@ -622,7 +699,17 @@ var Rules = (function () {
       // Rule K5 again — a child cannot be promised elsewhere while its set is out.
       if (item.parent_asset_id) {
         var parent = byId[item.parent_asset_id];
-        if (parent && parent.status !== 'available') {
+
+        // Unless the set is out to this very mahotsav, in which case the piece
+        // is already on site and booking it for a sub-event is exactly right.
+        var parentMv = openMovementFor(state.movements || [], item.parent_asset_id);
+        var parentHere = parentMv && req.event_id &&
+          (sameEventTree(state, parentMv.event_id, req.event_id) ||
+           sameEventTree(state, parentMv.sub_event_id, req.event_id)) &&
+          rangeContains(state.today, parentMv.expected_return_date, from, to) &&
+          daysOverdue(parentMv.expected_return_date, '', state.today) === 0;
+
+        if (parent && parent.status !== 'available' && !parentHere) {
           return err('PARENT_OUT',
             label(item) + ' belongs to ' + label(parent) + ', which is currently ' +
             plainStatus(parent.status) + '.');
@@ -638,7 +725,7 @@ var Rules = (function () {
         for (var k = 0; k < kids.length; k++) {
           var child = kids[k];
           var childClashes = conflictsFor(state, child.asset_id, from, to,
-                                          req.ignore_allocation_ids);
+                                          req.ignore_allocation_ids, req.event_id);
           if (!childClashes.length) {
             add(child.asset_id);
           } else {
@@ -768,6 +855,9 @@ var Rules = (function () {
     // availability over a window
     rangesOverlap: rangesOverlap,
     conflictsFor: conflictsFor,
+    rangeContains: rangeContains,
+    rootEventOf: rootEventOf,
+    sameEventTree: sameEventTree,
     isFreeBetween: isFreeBetween,
     windowPhrase: windowPhrase,
     // decisions
