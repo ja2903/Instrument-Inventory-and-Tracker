@@ -2019,10 +2019,29 @@
       }
 
       App.rememberName(g.name.trim());
+
+      /*
+       * Some of these may have been MOVED rather than handed over: instruments
+       * already out to this mahotsav, now recorded against one of its days.
+       * Saying "handed over" for those would describe a journey that did not
+       * happen, which is the whole thing this feature exists to stop.
+       */
+      var movedCount = (result.moved || []).length;
       var count = (result.checked_out || result.asset_ids || []).length;
-      UI.toast(g.when === 'now'
-        ? UI.plural(count, 'instrument') + ' handed over'
-        : UI.plural(count, 'instrument') + ' booked', 'success');
+
+      var message;
+      if (g.when !== 'now') {
+        message = UI.plural(count, 'instrument') + ' booked';
+      } else if (movedCount && count) {
+        message = UI.plural(count, 'instrument') + ' handed over, ' +
+                  movedCount + ' moved across';
+      } else if (movedCount) {
+        message = UI.plural(movedCount, 'instrument') + ' moved to ' +
+                  (App.eventById(g.event_id) || {}).name;
+      } else {
+        message = UI.plural(count, 'instrument') + ' handed over';
+      }
+      UI.toast(message, 'success');
 
       resetGive();
       App.go('#/');

@@ -434,8 +434,35 @@ var Rules = (function () {
       // An explicitly scanned item that is unavailable is a hard error. Only
       // children pulled in by a parent get the skip-with-warning treatment (K2).
       if (item.status === 'checked_out') {
+        var openMv = openMovementFor(movements, id);
+
+        /*
+         * Already out to this same occasion — the mahotsav this event sits
+         * inside, or a day of it. The instrument is physically in the right
+         * hands already, so this is not a second handover: it is the SAME loan
+         * being re-labelled from "Paris Mandir Mahotsav" to "Nagar Yatra", or
+         * back the other way.
+         *
+         * Handing it out again would open a second loan for one instrument and
+         * break the one-open-loan rule the whole check-in flow depends on. So
+         * it becomes a move, and the action layer updates the existing row.
+         */
+        var alreadyHere = openMv && req.event_id &&
+          (nestedEvents(state, openMv.sub_event_id || openMv.event_id, req.event_id) ||
+           nestedEvents(state, openMv.event_id, req.event_id));
+
+        if (alreadyHere) {
+          if (!seen[id]) {
+            var moveLine = { asset_id: id, via_parent_asset_id: '',
+                             move: true, movement_id: openMv.movement_id };
+            seen[id] = moveLine;
+            lines.push(moveLine);
+          }
+          continue;
+        }
+
         return err('ITEM_CHECKED_OUT',
-          label(item) + ' is already ' + whereabouts(openMovementFor(movements, id)) + '.');
+          label(item) + ' is already ' + whereabouts(openMv) + '.');
       }
       if (item.status === 'maintenance') {
         return err('BAD_REQUEST', label(item) + ' is marked for maintenance and cannot go out.');
